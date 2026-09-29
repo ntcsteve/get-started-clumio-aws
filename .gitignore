@@ -1,0 +1,14 @@
+# Terraform working files and state (state holds the connection token and ExternalId)
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+crash.log
+tf-debug.log
+
+# Step 0 output (per run; share the folder, don't commit it)
+clumio-iam-preview-*/
+
+__pycache__/
+.DS_Store
+*.zip
