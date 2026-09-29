@@ -1,11 +1,11 @@
-# Step 2 (RDS + Aurora): one Clumio policy, AWS PITR + SecureVault Standard + Archive, by tag.
-# Creates only Clumio objects; needs no AWS login. Clumio then sets each tagged database's PITR.
-# Clumio login: CLUMIO_API_TOKEN, CLUMIO_API_BASE_URL.
+# Step 2b: one Clumio backup policy (AWS PITR, SecureVault Standard and Archive) and a rule that
+# applies it to every database with your tag. Creates Clumio objects only, so no AWS login;
+# Clumio then sets each tagged database's PITR window. Credentials: CLUMIO_API_TOKEN, CLUMIO_API_BASE_URL.
 
 provider "clumio" {}
 
-# Step 1's connection. None for this account + region: the plan stops with
-# "AWS connection not found" (proven live), so a typo can't protect nothing.
+# Step 1's connection. If there's none for this account and Region, such as after a typo, the
+# plan stops here with "AWS connection not found".
 data "clumio_aws_connection" "this" {
   account_native_id = var.account_id
   aws_region        = var.region
@@ -14,17 +14,17 @@ data "clumio_aws_connection" "this" {
 locals {
   account_id = var.account_id
   region     = var.region
-  name       = var.name != "" ? var.name : "rds-${var.account_id}-${var.region}" # unique across the Clumio tenant
+  name       = var.name != "" ? var.name : "rds-${var.account_id}-${var.region}" # Must be unique across your Clumio tenant.
 }
 
 resource "clumio_policy" "lifecycle" {
   name = local.name
 
-  # 1. AWS PITR: Clumio SETS each database's automated-backup retention to this, up or
-  #    DOWN. A lower value than today's shrinks the database's point-in-time window.
+  # AWS PITR: Clumio sets each tagged database's PITR window to this, longer or shorter than
+  # today. Shorter means less history to recover from.
   operations {
     type           = "aws_rds_resource_aws_snapshot"
-    action_setting = "immediate"
+    action_setting = "immediate" # Start now, not at the next scheduled window.
     slas {
       retention_duration {
         unit  = "days"
@@ -37,15 +37,15 @@ resource "clumio_policy" "lifecycle" {
     }
     advanced_settings {
       aws_rds_config_sync {
-        apply = "maintenance_window" # an RDS instance going from 0 to N days needs a restart; wait for its window
+        apply = "maintenance_window" # Turning backups on for an RDS instance needs a restart, so wait for its maintenance window.
       }
     }
   }
 
-  # 2. SecureVault Standard: a daily copy in Clumio, outside your account.
+  # SecureVault Standard keeps a daily copy in Clumio, outside your account.
   operations {
     type           = "aws_rds_resource_rolling_backup"
-    action_setting = "immediate" # first copy starts once the rule matches
+    action_setting = "immediate" # The first copy starts as soon as the rule matches a database.
     slas {
       retention_duration {
         unit  = "days"
@@ -58,10 +58,10 @@ resource "clumio_policy" "lifecycle" {
     }
   }
 
-  # 3. SecureVault Archive: a monthly long-term copy, built by Clumio from the Standard copy.
+  # SecureVault Archive keeps a monthly copy for the long term, made from the Standard copy.
   operations {
     type           = "aws_rds_resource_granular_backup"
-    action_setting = "immediate"
+    action_setting = "immediate" # Start now, not at the next scheduled window.
     slas {
       retention_duration {
         unit  = "months"
@@ -74,18 +74,18 @@ resource "clumio_policy" "lifecycle" {
     }
     advanced_settings {
       aws_rds_resource_granular_backup {
-        backup_tier = "frozen" # the Archive tier; the only one Clumio allows for new policies
+        backup_tier = "frozen" # Clumio's name for SecureVault Archive
       }
     }
   }
 }
 
-# Every tagged RDS instance and Aurora cluster in this account + region, now and later.
-# Lowest priority: an existing rule that also matches a database wins.
+# Matches every tagged RDS instance and Aurora cluster in this account and Region, now and later.
+# It goes last in Clumio's order, so your existing rules always win.
 resource "clumio_policy_rule" "lifecycle" {
   name           = local.name
   policy_id      = clumio_policy.lifecycle.id
-  before_rule_id = "" # "" = lowest priority: after every existing rule
+  before_rule_id = "" # Empty means last, after every existing rule.
   condition = jsonencode({
     entity_type           = { "$in" = ["aws_rds_instance", "aws_rds_cluster"] }
     aws_account_native_id = { "$eq" = local.account_id }

@@ -1,76 +1,63 @@
-# Clumio IAM preview
+# Step 0: Preview the IAM
 
-Shows every IAM role, policy and permission `1-connect-clumio` would create, **before anything is
-created**, and whether the deploy role may create them. Give the output to your security team.
+Shows every IAM role, policy and permission `1-connect-clumio` would create, before anything is created, and checks that the deploy role may create them. Give the output to your security team.
+
+## Run it
 
 ```bash
-./preview.sh                                    # uses ../1-connect-clumio, checks your login
+./preview.sh                                    # checks your own login
 ./preview.sh --as <deploy role ARN>             # checks that role instead
 ./preview.sh --connect /path/to/1-connect-clumio
 ```
 
-It uses step 1's own `terraform.tfvars`, `variables.tf`, `versions.tf`, lock file and module
-version, so the preview matches what step 1 creates. Log in to the `account_id` in that file.
-Changed a setting? Run it again.
+It reads step 1's own `terraform.tfvars`, variables, versions, lock file and module version, so the preview matches what step 1 creates. Change a setting there, and run it again. Log in to the `account_id` in that file.
 
-Output folder `clumio-iam-preview-<region>-<time>/`:
+You need Terraform 1.5 or later, Python 3 and the AWS CLI. No Clumio token.
 
-| File | Holds |
-|---|---|
-| `summary.md` | Settings, what the deploy role needs, highlights, roles, policies, the SNS topic policy, every action, the check result |
-| `policies/*.json` | Every trust, managed, inline and resource policy |
-| `policies/deploy-role-policy.json` | The deploy role's policy. Replace `<ACCOUNT_ID>` before attaching it |
+## What it writes
 
-Compare two runs: `diff -r <old>/policies <new>/policies`
+Each run writes a folder, `clumio-iam-preview-<region>-<time>/`:
+
+- `summary.md`: everything on one page. Your settings, what the deploy role needs, highlights to read first, roles and who can assume them, policies, the SNS topic policy, all actions, and the check result.
+- `policies/`: every trust, managed, inline and resource policy, as JSON.
+- `policies/deploy-role-policy.json`: the deploy role's policy. Replace `<ACCOUNT_ID>` before attaching it.
+
+To compare two runs, such as before and after a module upgrade: `diff -r <old>/policies <new>/policies`.
 
 ## The check
 
-AWS's IAM policy simulator evaluates the deploy role's policies, boundary and SCPs for every
-role, policy, topic and rule, with the context step 1 sends: Region, role tags, permissions
-boundary, attached policy ARN.
+It asks AWS's IAM policy simulator whether the deploy role may perform every action on every role, policy, topic and rule step 1 creates. It sends what step 1 sends: the Region, role tags, permissions boundary and each attached policy's name. The simulator weighs the role's policies, its boundary and your service control policies (SCPs).
 
-| Result | Meaning |
-|---|---|
-| READY | Every action is allowed |
-| BLOCKED | Lists each denied action and ARN (`implicitDeny`: not granted; `explicitDeny`: denied by a policy or SCP) |
-| CANNOT CHECK | Root login, no `iam:SimulatePrincipalPolicy`, or (SSO) no `iam:GetRole` on your role |
+- **READY**: every action is allowed.
+- **BLOCKED**: lists each denied action and its ARN. *implicitDeny* means nothing grants it; *explicitDeny* means a policy or SCP denies it.
+- **CANNOT CHECK**: you're the root user, you lack `iam:SimulatePrincipalPolicy`, or, with SSO, you can't read your role with `iam:GetRole`.
 
-It can't see resource control policies or other condition keys your SCPs test. READY is strong
-evidence; the first apply by the deploy role is the proof.
+The simulator can't see resource control policies, or SCP conditions beyond Region, tags, boundary and policy name. READY is strong evidence; the deploy role's first apply is the proof.
 
-## Why it's safe
+## Why it's safe to run
 
-- `terraform plan` only, in a throwaway folder: nothing to apply.
-- Its Clumio provider points at `https://preview.invalid`: it never reaches Clumio.
-- AWS access is read-only: your account ID, Region, and the simulator.
-- Your account ID is masked (`<ACCOUNT_ID>`). If one is found unmasked, or the run stops early,
-  the output is deleted.
-- A policy form it can't render exactly makes it fail, not show a partial policy.
-- It refuses a backend in `versions.tf` (keep it in `backend.tf`).
-
-Needs Terraform 1.5+, python3, the AWS CLI. No Clumio token.
-
-## Files
-
-| File | Job |
-|---|---|
-| `preview.sh` | Builds a throwaway config from step 1, runs `terraform plan`, calls `extract.py`, runs the check |
-| `extract.py` | Turns the plan into `summary.md` and `policies/`. Reads only the plan file |
-| `test/test.sh` | Runs `extract.py` on two saved plans (`regulated/`, shipped `defaults/`) and compares with `expected/` |
+- It only runs `terraform plan`, in a temporary folder it deletes, so there's nothing to apply.
+- Its Clumio provider points at an address that doesn't exist, so it never reaches Clumio.
+- It only reads from AWS: your account ID, Region and the simulator.
+- It masks your account ID as `<ACCOUNT_ID>`. If the real ID appears, or the run stops early, it deletes the output and fails.
+- A policy it can't reproduce exactly makes it fail, rather than show a partial policy.
+- It refuses to run if `versions.tf` holds a backend. Keep the backend in `backend.tf`.
 
 ## Placeholders in the output
 
-| Placeholder | What it is | Filled by |
+Some values only exist once you connect:
+
+| Placeholder | Stands for | Real value comes from |
 |---|---|---|
 | `<ACCOUNT_ID>` | Your AWS account | You |
-| `<CLUMIO_AWS_ACCOUNT_ID>` | Clumio's account, in the trust policies | Clumio, at connect |
-| `<CLUMIO_DATA_PLANE_ACCOUNT_ID>` | Clumio's account holding your backups; the only one S3 copies may go to | Clumio, at connect |
-| `<EXTERNAL_ID>` | Your ExternalId | Clumio, at connect |
+| `<CLUMIO_AWS_ACCOUNT_ID>` | Clumio's AWS account, in trust policies | Clumio, at connect |
+| `<CLUMIO_DATA_PLANE_ACCOUNT_ID>` | Clumio's account that holds your backups; the only one S3 copies may go to | Clumio, at connect |
+| `<EXTERNAL_ID>` | Your ExternalId, in trust policies | Clumio, at connect |
 | `<CLUMIO_TOKEN>` | The connection token, in some names | Clumio, at connect |
 | `<ARN(s) of resources created in the same run>` | Roles, topics or rules this setup creates | Step 1 |
 
-## Checked live
+## How it's built
 
-- S3, and S3 + RDS (module 0.41.0): names matched the IAM step 1 created. EC2/EBS: rendered only.
-- The IAM simulator allows every check against `deploy-role-policy.json`, at the shipped defaults
-  and with prefix, boundary and tags (2026-09). BLOCKED for a role without it.
+`preview.sh` builds a temporary configuration from step 1's files, runs the plan and the check. `extract.py` turns the plan into `summary.md` and `policies/`, reading only the plan file. `test/test.sh` runs `extract.py` on two saved plans, one regulated and one with shipped defaults, and compares the output with known-good copies. Run it after any change here.
+
+What's been tested live is in [SECURITY.md](../SECURITY.md#what-is-proven-and-what-isnt).

@@ -19,7 +19,7 @@ variable "region" {
 }
 
 variable "iam_prefix" {
-  description = "Start of every IAM role and policy name Clumio creates. \"\" = Clumio's default names."
+  description = "The start of every IAM role and policy name Clumio creates. Empty means Clumio's default names."
   type        = string
 
   validation {
@@ -29,7 +29,7 @@ variable "iam_prefix" {
 }
 
 variable "iam_path" {
-  description = "IAM path for Clumio's roles and policies. \"/clumio/\" is Clumio's default; \"/\" = no path."
+  description = "The IAM path for Clumio's roles and policies. \"/clumio/\" is Clumio's default, and \"/\" means no path."
   type        = string
 
   validation {
@@ -56,7 +56,7 @@ variable "role_tags" {
 }
 
 variable "permissions_boundary_arn" {
-  description = "Permissions boundary your organization requires on IAM roles. \"\" = none. It must allow what Clumio's policies grant, or backups fail."
+  description = "The permissions boundary your organization requires on IAM roles, or empty for none. It must allow what Clumio's policies grant, or backups fail."
   type        = string
   default     = ""
 
@@ -67,7 +67,7 @@ variable "permissions_boundary_arn" {
 }
 
 variable "pass_role_deny_list" {
-  description = "Role ARNs Clumio must never pass to a service (adds a deny policy)."
+  description = "Roles Clumio must never pass to a service, by ARN. Adds a policy that denies it."
   type        = list(string)
   default     = []
 

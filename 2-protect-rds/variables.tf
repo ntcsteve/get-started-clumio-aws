@@ -19,7 +19,7 @@ variable "region" {
 }
 
 variable "name" {
-  description = "Name of the Clumio policy and rule. \"\" = rds-<account>-<region>. Unique across the Clumio tenant."
+  description = "Name of the Clumio policy and rule, unique across your tenant. Empty means rds-<account>-<region>."
   type        = string
   default     = ""
 }
@@ -33,7 +33,7 @@ variable "database_tag" {
 }
 
 variable "pitr_retention_days" {
-  description = "AWS PITR window Clumio sets on each database, in days. No default: Clumio lowers it too, so choose it."
+  description = "The AWS PITR window, in days, that Clumio sets on every tagged database, higher or lower than today. No default, so you choose it."
   type        = number
 
   validation {
@@ -41,6 +41,7 @@ variable "pitr_retention_days" {
     error_message = "Set pitr_retention_days in terraform.tfvars to the PITR window you run today (BackupRetentionPeriod: `aws rds describe-db-clusters` for Aurora, `describe-db-instances` for RDS). Clumio sets it up AND down."
   }
 
+  # 0 is the shipped placeholder, stopped by the check above with a clearer message.
   validation {
     condition     = var.pitr_retention_days == 0 || (var.pitr_retention_days >= 1 && var.pitr_retention_days <= 35 && floor(var.pitr_retention_days) == var.pitr_retention_days)
     error_message = "pitr_retention_days must be a whole number from 1 to 35 (AWS's range)."

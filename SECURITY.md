@@ -1,40 +1,42 @@
 # Security review
 
-For the team that approves Clumio's IAM. Step 0 (`0-iam-preview/preview.sh`) lists every role,
-policy, permission and ARN for your settings, plus the deploy role's policy. This page explains
-it. Facts come from Clumio's module (`aws-template` 0.41.0) and live tests.
+For the team that approves Clumio's access to an AWS account: what step 1 creates, who can use it, what Clumio can do, and what the deploy role needs.
 
-## Sign-off checklist
+You don't have to trust this page. Step 0 (`0-iam-preview/preview.sh`) writes the exact list for your settings: every role, policy, permission and ARN, as JSON you can read and diff. This page explains it. Facts come from Clumio's Terraform module 0.41.0 and live tests.
 
-1. **Naming:** set `iam_prefix` and `iam_path`. Allow the names Clumio fixes (below).
-2. **Controls:** set `role_tags`, `permissions_boundary_arn`, `pass_role_deny_list` if required.
-3. **Reach:** review what Clumio's roles and topic may do (below, and step 0's highlights).
-4. **Deploy role:** in step 0's output folder, `policies/deploy-role-policy.json`: replace `<ACCOUNT_ID>`, then grant it,
-   plus read and write on your Terraform state bucket.
-5. **Check:** `./preview.sh --as <deploy role ARN>` says READY.
+## What you're approving
 
-## The deploy role is privileged
+Step 1 creates two IAM roles (three with S3), some managed and inline IAM policies, an SNS topic and EventBridge rules in one account and Region. [What step 1 creates](#what-step-1-creates) has the numbers. Clumio's AWS account assumes the main role to find, back up and restore data, and must present a secret ExternalId to do so. The ExternalId is kept in step 1's Terraform state.
 
-It creates IAM, so use it from CI/CD only, with short-lived credentials.
+You're also approving the deploy role, the AWS identity that runs step 1. It creates IAM, so it's the most privileged part of this setup.
 
-`deploy-role-policy.json` narrows it:
+## How to review and sign off
 
-- IAM actions are limited to names starting with `[<prefix>-]Clumio`; SNS and EventBridge to
-  `Clumio*` (Clumio fixes those names).
-- It attaches only policies named `[<prefix>-]Clumio*` (`iam:PolicyARN`). This limits the
-  **name, not the content**: it can create such a policy with any content.
-- With `permissions_boundary_arn`, it creates roles only with that boundary and can't remove it.
+1. **Naming.** Set `iam_prefix` and `iam_path` in `1-connect-clumio/terraform.tfvars` to your rule. Allow the names Clumio fixes (see [Names](#names)).
+2. **Controls.** If required, set `role_tags`, `permissions_boundary_arn` and `pass_role_deny_list` (see [Your organization's rules](#your-organizations-rules)).
+3. **Reach.** Read [What Clumio can do](#what-clumio-can-do-in-your-account) and the highlights in step 0's `summary.md`.
+4. **Deploy role.** In step 0's `policies/deploy-role-policy.json`, replace `<ACCOUNT_ID>` and grant it to the deploy role, plus read and write on your Terraform state bucket.
+5. **Check.** Run `./preview.sh --as <deploy role ARN>`. Sign off on READY.
 
-What remains: it can create a `Clumio*` role with any trust policy (even one another account
-can assume) and any permissions. **Without a permissions boundary, it is equivalent to an
-administrator.** With one, every role it creates is capped by the boundary.
+## The deploy role, and its risk
 
-Regulated organizations: set `permissions_boundary_arn`, and alert on (or SCP-block) changes to
-`Clumio*` roles' trust policies.
+The deploy role creates IAM, so use it from CI/CD only, with short-lived credentials, never as a daily login.
+
+Step 0's policy narrows it three ways:
+
+- IAM actions work only on names starting with `[<prefix>-]Clumio`, where `[<prefix>-]` is your `iam_prefix` and a dash, or nothing. SNS and EventBridge actions work only on names starting with `Clumio`, because Clumio fixes those names.
+- It can attach only policies named `[<prefix>-]Clumio*`. This limits the name, not the content: it can create such a policy with any permissions.
+- With `permissions_boundary_arn`, it can create roles only with your boundary, and can't remove it.
+
+Real power remains. It can create a `Clumio*` role with any trust policy, even one another AWS account can assume, and any permissions. **Without a permissions boundary, the deploy role equals an administrator.** With one, every role it creates is capped by the boundary.
+
+For regulated organizations: set `permissions_boundary_arn`, and alert on, or block with a service control policy (SCP), changes to `Clumio*` roles' trust policies.
 
 ## Names
 
-| Entity | Default (`iam_prefix = ""`, `iam_path = "/clumio/"`) | With `iam_prefix` |
+By default, Clumio names its roles and policies `Clumio…` under path `/clumio/`, ending most names with a connection token it issues at connect. With `iam_prefix`, names start with your prefix and drop the token.
+
+| What | Default name | With `iam_prefix` |
 |---|---|---|
 | Main role | `/clumio/ClumioIAMRole-<r>-<token>` | `<path><prefix>-ClumioIAMRole-<r>` |
 | EventBridge role (S3) | `/clumio/ClumioS3EbRole-<r>-<token>` | `<path><prefix>-ClumioS3EbRole-<r>` |
@@ -43,101 +45,89 @@ Regulated organizations: set `permissions_boundary_arn`, and alert on (or SCP-bl
 | S3 EventBridge policy | `/ClumioS3EbPolicy-<account>-<region>-<token>` | `/<prefix>-ClumioS3EbPolicy-<region>` |
 | Inline policies, SNS topic, EventBridge rules | `Clumio<Name>…<token>` | Unchanged: Clumio sets these |
 
-`<r>`: short Region (`ase-1` for ap-southeast-1). `<token>`: issued by Clumio at connect.
+`<r>` is the short Region, such as `ase-1` for ap-southeast-1.
 
-> **Important** The S3 EventBridge policy is always at path `/`: the module ignores `iam_path`
-> for it. A path rule or SCP needs an exception. Step 0 shows and grants it correctly.
+One exception: Clumio's module always creates the S3 EventBridge policy at path `/`, whatever `iam_path` says. If you enforce a path, it needs an exception. Step 0 lists and grants it at its real path.
 
 ## Your organization's rules
 
-| Your rule | Set in `1-connect-clumio/terraform.tfvars` | Note |
+| Your rule | Setting | Note |
 |---|---|---|
-| Names need a prefix | `iam_prefix` | 36 characters at most |
-| Names need a path, or none | `iam_path`, such as `"/"` | Starts and ends with `/`. Not applied to the S3 EventBridge policy |
-| Roles need your tags | `role_tags` | Added to Clumio's `Vendor = Clumio` |
-| Roles need a permissions boundary | `permissions_boundary_arn` | Must allow what Clumio's policies grant, or backups fail |
-| Some roles must never be passed | `pass_role_deny_list` | Adds an inline deny policy |
-| Inline policy, topic, rule names | Not settable | Allow an exception |
-| Tags on the topic, rules or managed policies | Not supported | An SCP requiring them blocks step 1 |
-| Encrypted SNS topic | Not in this kit | Module input `create_clumio_inventory_sns_topic_encryption_key`; the deploy role then needs KMS |
+| Names need a prefix | `iam_prefix` | 36 characters at most. |
+| Names need a path, or none | `iam_path`, such as `"/"` | Starts and ends with `/`. The S3 EventBridge policy ignores it. |
+| Roles need your tags | `role_tags` | Added to Clumio's `Vendor = Clumio`. |
+| Roles need a permissions boundary | `permissions_boundary_arn` | Must allow what Clumio's policies grant, or backups fail. |
+| Some roles must never be passed | `pass_role_deny_list` | Adds an inline policy that denies passing them. |
 
-> **Important** Clumio tags its roles, so the deploy role needs `iam:TagRole`. Without it,
-> `CreateRole` fails with `AccessDenied` (proven live).
+Some things can't be set. Inline policies, the SNS topic and EventBridge rules keep Clumio's names, so they need a naming exception. The topic, rules and managed policies can't carry your tags, so an SCP requiring tags on them blocks step 1. The SNS topic isn't encrypted with your key; the module can (`create_clumio_inventory_sns_topic_encryption_key`), but the deploy role then needs KMS permissions.
 
-> **Important** Changing `iam_prefix` or `iam_path` later replaces Clumio's roles and policies.
+Two more facts. Clumio tags its roles, so the deploy role needs `iam:TagRole` as well as `iam:CreateRole`, or role creation fails with *AccessDenied*. And changing `iam_prefix` or `iam_path` later replaces all of Clumio's roles and policies.
 
-## Who can use Clumio's roles and topic
+## Who can use it
 
 | Resource | Who | How |
 |---|---|---|
-| Main role | Clumio's account (`ClumioCustomerProtectRole`) | Assume, only with your ExternalId |
-| Support role | Clumio's account (`ClumioCustomerSupportRole`) | Assume, only with your ExternalId |
-| EventBridge role (S3) | Amazon EventBridge | Assume, only from your account |
+| Main role | Clumio's AWS account (`ClumioCustomerProtectRole`) | Assume, only with your ExternalId |
+| Support role | Clumio's AWS account (`ClumioCustomerSupportRole`) | Assume, only with your ExternalId |
+| EventBridge role (S3) | Amazon EventBridge | Assume, only for your account |
 | SNS topic | Any principal, and EventBridge | Publish, only from your account (`AWS:SourceAccount`) |
-| SNS topic | Clumio's account | Subscribe, list subscriptions |
+| SNS topic | Clumio's AWS account | Subscribe, list subscriptions |
 
-The ExternalId is a secret in step 1's state.
+The SNS topic carries changes in your account, such as a new bucket, to Clumio. "Any principal" looks open, but the `AWS:SourceAccount` condition allows only sources in your account to publish.
 
-## What Clumio's roles may do
+## What Clumio can do in your account
 
-Highlights; step 0 derives them from the policies. Read every file in `policies/`.
+The permissions reviewers ask about. Step 0 finds them in the policies and lists them under "Review before approving" in `summary.md`. Read every file in `policies/` before approving.
 
-| Workload | May do |
-|---|---|
-| All | Use any KMS key whose key policy lets IAM grant access (deny it in the key policy to exclude). Send events to Clumio's event bus and queues |
-| S3 | Read objects in any bucket it can reach, including other accounts' that allow it. Write and delete objects in this account's buckets (restores). Change bucket notifications and inventory. Copy backups only to Clumio's own account. At runtime, create EventBridge rules `clumio-s3-event-rule-*` and Storage Lens configs `clumio-storage-lens-*` |
-| RDS / Aurora | Change settings of every database in the region, not only tagged ones (backup retention). Create, copy, delete snapshots. Pass any role, only to RDS (restores). Same IAM serves DocumentDB and Neptune |
-| EC2 / EBS | Launch instances (restores). Terminate only instances it restored. Delete only snapshots tagged `Vendor=Clumio`. Pass any role, only to EC2 |
-| Support | Open, read, update AWS Support cases; read Trusted Advisor. Always created: no setting to turn it off |
+**All workloads:** use any KMS key whose key policy allows IAM principals in your account, to read encrypted data (deny Clumio in a key's policy to exclude it); send events and messages to Clumio's event bus and queues.
 
-## What step 1 creates
+**S3:** read objects in any bucket it can reach, including other accounts' buckets that allow it; write and delete objects in your buckets, for restores; change bucket event notifications and inventory; copy backups only to Clumio's own account; at runtime, create EventBridge rules `clumio-s3-event-rule-*` and Storage Lens configurations `clumio-storage-lens-*`.
 
-| Kind | Always | + S3 | + RDS | + EC2/EBS |
+**RDS and Aurora:** change settings of every database in the Region, not only tagged ones, to manage backup retention; create, copy and delete snapshots; pass any role to RDS, so restored databases get their roles back. The same permissions cover DocumentDB and Neptune.
+
+**EC2 and EBS:** launch instances for restores; terminate only instances it restored; delete only snapshots tagged `Vendor=Clumio`; pass any role to EC2.
+
+**Support:** open, read and update AWS Support cases; read Trusted Advisor. This role is always created; it can't be turned off.
+
+## What is proven, and what isn't
+
+Tested live on a Clumio test tenant, September 2026.
+
+**Proven:** connecting; protecting S3 (Backtrack, SecureVault Standard) and RDS and Aurora (PITR, SecureVault Standard, Archive); restoring; tearing down; IAM names matching step 0; `iam:TagRole` being required; READY and BLOCKED results; the IAM simulator allowing every action in the generated deploy policy, at the shipped defaults and with a prefix, boundary and tags; step 2 stopping without a connection; a backup rule picking up a newly created tagged database.
+
+**Not yet proven:** step 1 at the default path `/clumio/` (live runs used `/`); a full apply by a least-privilege deploy role, with tags, boundary and deny list; connecting EC2 and EBS (step 0 renders their IAM, but no live run created it).
+
+## What step 0's check can't see
+
+READY comes from AWS's IAM policy simulator. It's strong evidence, but it can't see resource control policies, or every condition your SCPs test, so the deploy role's first apply is the final proof. [The check](0-iam-preview/README.md#the-check) explains what it tests.
+
+## Reference
+
+### What step 1 creates
+
+| What | Always | With S3 | With RDS | With EC2 and EBS |
 |---|---|---|---|---|
-| IAM roles | 2 (main, support) | +1 | 0 | 0 |
+| IAM roles | 2 (main, support) | +1 | none | none |
 | Managed policies | 1 | +3 | +2 | +2 |
-| Inline policies | 4 (+1 with a deny list) | 0 | 0 | 0 |
-| SNS topic (+ its policy) | 1 | 0 | 0 | 0 |
+| Inline policies | 4, or 5 with a deny list | none | none | none |
+| SNS topic, with its policy | 1 | none | none | none |
 | EventBridge rules | 1 | +2 | +3 | +6 |
 
-## What the deploy role needs
+### The deploy role's policy
 
-From CloudTrail on live runs (create, update, destroy), plus tagging and boundary actions.
-`[<prefix>-]` appears only when `iam_prefix` is set.
+From CloudTrail records of live runs that created, updated and destroyed everything, plus tagging and boundary actions. `[<prefix>-]` appears only when `iam_prefix` is set.
 
-| Statement | On | Actions | Condition |
+| Statement | Resources | Actions | Condition |
 |---|---|---|---|
-| Manage roles | `role/<path>[<prefix>-]Clumio*` | `iam:TagRole, UntagRole, ListRoleTags, GetRole, DeleteRole, ListRolePolicies, ListAttachedRolePolicies, ListInstanceProfilesForRole, PutRolePolicy, GetRolePolicy, DeleteRolePolicy, UpdateAssumeRolePolicy, UpdateRole`; `DeleteRolePermissionsBoundary` only without a boundary | None |
-| Create roles | same | `iam:CreateRole, PutRolePermissionsBoundary` | Your boundary, if set |
-| Attach policies | same | `iam:AttachRolePolicy, DetachRolePolicy` | Policy name as in the next row |
-| Managed policies | `policy/<path>[<prefix>-]Clumio*`, and the S3 EventBridge policy at `/` | `iam:CreatePolicy, GetPolicy, GetPolicyVersion, ListPolicyVersions, CreatePolicyVersion, DeletePolicyVersion, DeletePolicy` | None |
-| SNS topic | `sns:<region>:<account>:ClumioInventoryTopic_*` | `sns:CreateTopic, GetTopicAttributes, SetTopicAttributes, ListTagsForResource, DeleteTopic` | None |
-| EventBridge rules | `events:<region>:<account>:rule/Clumio*` | `events:PutRule, DescribeRule, ListTagsForResource, PutTargets, ListTargetsByRule, RemoveTargets, DeleteRule` | None |
+| Manage roles | `role/<path>[<prefix>-]Clumio*` | `iam:TagRole`, `UntagRole`, `ListRoleTags`, `GetRole`, `DeleteRole`, `ListRolePolicies`, `ListAttachedRolePolicies`, `ListInstanceProfilesForRole`, `PutRolePolicy`, `GetRolePolicy`, `DeleteRolePolicy`, `UpdateAssumeRolePolicy`, `UpdateRole`, and `DeleteRolePermissionsBoundary` without a boundary | None |
+| Create roles | Same | `iam:CreateRole`, `PutRolePermissionsBoundary` | Your boundary, if set |
+| Attach policies | Same | `iam:AttachRolePolicy`, `DetachRolePolicy` | Policies named as in the next row |
+| Managed policies | `policy/<path>[<prefix>-]Clumio*`, and the S3 EventBridge policy at `/` | `iam:CreatePolicy`, `GetPolicy`, `GetPolicyVersion`, `ListPolicyVersions`, `CreatePolicyVersion`, `DeletePolicyVersion`, `DeletePolicy` | None |
+| SNS topic | `sns:<region>:<account>:ClumioInventoryTopic_*` | `sns:CreateTopic`, `GetTopicAttributes`, `SetTopicAttributes`, `ListTagsForResource`, `DeleteTopic` | None |
+| EventBridge rules | `events:<region>:<account>:rule/Clumio*` | `events:PutRule`, `DescribeRule`, `ListTagsForResource`, `PutTargets`, `ListTargetsByRule`, `RemoveTargets`, `DeleteRule` | None |
 
-`UpdateAssumeRolePolicy` and `UpdateRole` are for module upgrades. No `iam:PassRole`. Not
-included: your state bucket. Step 2 needs no AWS permissions.
+`UpdateAssumeRolePolicy` and `UpdateRole` are for module upgrades. The deploy role never needs `iam:PassRole`. State bucket access isn't included. Step 2 needs no AWS permissions.
 
-## What the check can't see
+### Where Clumio's documentation differs
 
-Step 0 asks AWS's IAM policy simulator, which evaluates the deploy role's policies, boundary and
-SCPs with the Region, tags, boundary and policy ARN step 1 sends. It can't see resource control
-policies or other condition keys your SCPs test. READY is strong evidence; the first apply by
-the deploy role is the proof.
-
-## Proven live, and not yet
-
-| Proven live (test tenant, 2026-09) | Not yet |
-|---|---|
-| Connect; protect S3 (Backtrack + Standard), RDS and Aurora (PITR + Standard + Archive); restore; teardown | EC2/EBS connect (IAM rendered only) |
-| Preview names match the IAM created | `role_tags`, boundary, deny list applied by a least-privilege role |
-| `iam:TagRole` required; READY and BLOCKED | `iam:PolicyARN` and boundary conditions under a real apply |
-| Step 2 stops without a connection (`AWS connection not found`) | Step 1 at the default `iam_path = "/clumio/"` (live runs used `/`) |
-
-## Where Clumio's documentation differs
-
-- `iam:TagRole` is required; Clumio's deploy list omits it.
-- `ClumioSSMNotificationRole` (SQL Server on EC2, not used here) is trusted by
-  `ssm.amazonaws.com` in the module; Clumio's docs say Clumio's control plane.
-
-Sources: [IAM permissions required to deploy](https://documentation.commvault.com/clumio/iam_permissions_required_to_deploy_clumio_service.html),
-[Permissions file details](https://documentation.commvault.com/clumio/permissions_file_details.html).
+`iam:TagRole` is required, but Clumio's list of deploy permissions leaves it out. Sources: [IAM permissions required to deploy](https://documentation.commvault.com/clumio/iam_permissions_required_to_deploy_clumio_service.html), [Permissions file details](https://documentation.commvault.com/clumio/permissions_file_details.html).

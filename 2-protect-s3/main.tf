@@ -1,11 +1,11 @@
-# Step 2 (S3): one Clumio policy, Backtrack + SecureVault Standard, for buckets by name or tag.
-# No Archive: Clumio allows one SecureVault tier per S3 policy (error 111).
-# Creates only Clumio objects; needs no AWS login. Clumio login: CLUMIO_API_TOKEN, CLUMIO_API_BASE_URL.
+# Step 2a: one Clumio backup policy (Backtrack and SecureVault Standard) for buckets chosen by
+# name or tag. No Archive tier: Clumio allows one SecureVault tier per S3 policy (error 111).
+# Creates Clumio objects only, so no AWS login. Credentials: CLUMIO_API_TOKEN, CLUMIO_API_BASE_URL.
 
 provider "clumio" {}
 
-# Step 1's connection. None for this account + region: the plan stops with
-# "AWS connection not found" (proven live), so a typo can't protect nothing.
+# Step 1's connection. If there's none for this account and Region, such as after a typo, the
+# plan stops here with "AWS connection not found".
 data "clumio_aws_connection" "this" {
   account_native_id = var.account_id
   aws_region        = var.region
@@ -16,11 +16,11 @@ locals {
   region     = var.region
   is_by_name = var.protect_by == "name"
   is_by_tag  = var.protect_by == "tag"
-  name       = var.name != "" ? var.name : "s3-${var.account_id}-${var.region}" # unique across the Clumio tenant
-  tag        = coalesce(var.bucket_tag, { key = "", value = "" })               # "" only until the precondition below stops a missing tag
+  name       = var.name != "" ? var.name : "s3-${var.account_id}-${var.region}" # Must be unique across your Clumio tenant.
+  tag        = coalesce(var.bucket_tag, { key = "", value = "" })               # The empty default lets Terraform read the description; a check below stops a missing tag.
 }
 
-# --- By name: find each bucket in Clumio; fail if any is missing -------------------
+# --- By name: find each bucket in Clumio, and stop if any is missing ----------------
 
 data "clumio_s3_bucket" "named" {
   count        = local.is_by_name ? 1 : 0
@@ -39,7 +39,7 @@ data "clumio_s3_bucket" "named" {
 }
 
 locals {
-  # Only this account + region: the connection 1-connect-clumio made.
+  # Keep only buckets in this account and Region, the ones step 1 connected.
   found_buckets = local.is_by_name ? [
     for b in data.clumio_s3_bucket.named[0].s3_buckets : b
     if b.account_native_id == local.account_id && b.aws_region == local.region
@@ -53,8 +53,8 @@ resource "clumio_protection_group" "this" {
   name        = local.name
   description = local.is_by_name ? "S3 buckets by name in ${local.account_id}/${local.region}" : "S3 buckets tagged ${local.tag.key}=${local.tag.value} in ${local.account_id}/${local.region}"
 
-  # By tag: Clumio adds every matching bucket, now and later. Pinned to this account +
-  # region, because a tag alone matches across the whole Clumio tenant.
+  # By tag, Clumio adds every matching bucket, now and later. Limited to this account and
+  # Region, because a tag alone matches across your whole tenant.
   bucket_rule = local.is_by_tag ? jsonencode({
     aws_tag               = { "$eq" = { key = local.tag.key, value = local.tag.value } }
     aws_account_native_id = { "$eq" = local.account_id }
@@ -62,7 +62,7 @@ resource "clumio_protection_group" "this" {
   }) : null
 
   object_filter {
-    # Objects in other classes (Glacier Instant Retrieval, Glacier, Deep Archive, ...) are not backed up.
+    # Objects in the Glacier storage classes are not backed up.
     storage_classes = ["S3 Standard", "S3 Standard-IA", "S3 Intelligent-Tiering", "S3 One Zone-IA"]
   }
 
@@ -78,7 +78,7 @@ resource "clumio_protection_group" "this" {
   }
 }
 
-# By name: add each bucket to the group by its Clumio ID (no tags needed).
+# By name, each bucket joins the group by its Clumio ID, so it needs no tag.
 resource "clumio_protection_group_bucket" "named" {
   for_each            = { for b in local.found_buckets : b.name => b.id }
   protection_group_id = clumio_protection_group.this.id
@@ -88,10 +88,10 @@ resource "clumio_protection_group_bucket" "named" {
 resource "clumio_policy" "lifecycle" {
   name = local.name
 
-  # 1. Backtrack: roll a bucket back in place from its own versions (needs S3 Versioning).
+  # Backtrack rolls a bucket back in place, using its own object versions. It needs S3 Versioning.
   operations {
     type           = "aws_s3_backtrack"
-    action_setting = "immediate"
+    action_setting = "immediate" # Start now, not at the next scheduled window.
     slas {
       retention_duration {
         unit  = "months"
@@ -104,10 +104,10 @@ resource "clumio_policy" "lifecycle" {
     }
   }
 
-  # 2. SecureVault Standard: a daily copy in Clumio, outside your account.
+  # SecureVault Standard keeps a daily copy in Clumio, outside your account.
   operations {
     type           = "protection_group_backup"
-    action_setting = "immediate" # first backup starts on assignment
+    action_setting = "immediate" # The first backup starts as soon as the policy is assigned.
     slas {
       retention_duration {
         unit  = "days"
@@ -120,7 +120,7 @@ resource "clumio_policy" "lifecycle" {
     }
     advanced_settings {
       protection_group_backup {
-        backup_tier = "cold" # SecureVault Standard
+        backup_tier = "cold" # Clumio's name for SecureVault Standard
       }
     }
   }
@@ -130,7 +130,7 @@ resource "clumio_policy_assignment" "this" {
   entity_id   = clumio_protection_group.this.id
   entity_type = "protection_group"
   policy_id   = clumio_policy.lifecycle.id
-  depends_on  = [clumio_protection_group_bucket.named] # buckets in the group before the first backup
+  depends_on  = [clumio_protection_group_bucket.named] # Add the buckets before the first backup starts.
 }
 
 output "protection_group_id" {

@@ -19,7 +19,7 @@ variable "region" {
 }
 
 variable "name" {
-  description = "Name of the Clumio protection group and its policy. \"\" = s3-<account>-<region>. Unique across the Clumio tenant."
+  description = "Name of the Clumio protection group and its policy, unique across your tenant. Empty means s3-<account>-<region>."
   type        = string
   default     = ""
 }
@@ -35,18 +35,19 @@ variable "protect_by" {
 }
 
 variable "bucket_names" {
-  description = "protect_by = \"name\": the buckets to back up (names, not ARNs)."
+  description = "With protect_by = \"name\": the buckets to back up, by name (not ARN)."
   type        = list(string)
   default     = []
 
+  # The shipped placeholder passes here, so a precondition in main.tf can say exactly what to replace.
   validation {
     condition     = alltrue([for n in var.bucket_names : n == "BUCKET-NAME-REPLACE-THIS" || can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", n))])
-    error_message = "bucket_names: use bucket names (e.g. my-bucket), not ARNs (arn:aws:s3:::my-bucket)."
+    error_message = "bucket_names: use bucket names (such as my-bucket), not ARNs (arn:aws:s3:::my-bucket)."
   }
 }
 
 variable "bucket_tag" {
-  description = "protect_by = \"tag\": back up every bucket carrying this tag, including ones added later."
+  description = "With protect_by = \"tag\": back up every bucket with this tag, including buckets tagged later."
   type = object({
     key   = string
     value = string
