@@ -9,7 +9,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-STEPS="1-connect-clumio 2-protect-s3 2-protect-rds"
+STEPS="1-connect-clumio 2-protect-s3 2-protect-rds sample-data"
 SHIPPED="main.tf variables.tf versions.tf terraform.tfvars .terraform.lock.hcl"
 FAILED=0
 pass() { printf 'PASS  %s\n' "$1"; }
