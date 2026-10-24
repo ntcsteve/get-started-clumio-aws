@@ -173,7 +173,7 @@ On Aurora, `LOAD DATA FROM S3` loads the file from a bucket instead of your comp
 > [!IMPORTANT]
 > Name the restored cluster `orders-db-restore`, as in step 2. `./lab drop` and `./lab down` find restores by the `orders-db-` start of the name, or by the `orders-db` subnet group.
 
-1. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. If more than one is listed, filter the list by your account ID and Region first: other learners, or an earlier run, can have one too. Then choose the one that's in AWS, not deleted. A restore with **Default** settings goes to the source's account, so the wrong one would land in someone else's.
+1. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. If more than one is listed, filter the list by your account ID and Region first: other learners on the same Clumio tenant can have one too. Then choose the one that's in AWS, not deleted. A restore with **Default** settings goes to the source's account, so the wrong one would land in someone else's.
 
 2. Choose the last SecureVault Standard recovery point before the change time, then **Restore**. Choose **Default** first, then enter `orders-db-restore` for **Aurora cluster name**. Switching between **Default** and **Custom** clears the name, so check it before you choose **Restore**.
 

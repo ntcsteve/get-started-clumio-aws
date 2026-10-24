@@ -98,7 +98,7 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
    ./lab status
    ```
 
-   The first line names this deployment, by an ID that `./lab seed` wrote into the database, and the day it loaded the data. If Clumio lists more than one `orders-db` later, your account ID and this time tell you which is yours.
+   The first line names this deployment, by an ID that `./lab seed` wrote into the database. After a restore, `./lab check` uses it to confirm the copy is this deployment's.
 
    **You should see** `ready for the incidents  yes` on the last line. If it says `no`, it names what's missing: wait, and run the command again later. In the test run, the documents' first recovery point was there within 3 minutes, and both of the database's within 25 minutes of its policy taking effect.
 

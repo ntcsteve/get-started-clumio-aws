@@ -50,7 +50,7 @@ Next, the worst case. Anything with enough access to the account can delete the 
 
 To bring the application back unchanged, restore the database under its original name, `orders-db`. The application and `./lab` find the database by name, so nothing else needs to change.
 
-5. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**. Filter **Status in AWS** to **Deleted resources**. Choose `orders-db`. If it isn't listed, clear the filter, and look for `orders-db` marked as deleted. If more than one is listed, filter the list by your account ID and Region first: other learners, or an earlier run, can have one too. Then choose the one with recovery points from after the seed time that `./lab status` shows on its `deployment` line. That time is in UTC, and the console shows your browser's time zone. If you choose another run's copy, `./lab check` says so after the restore.
+5. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**. Filter **Status in AWS** to **Deleted resources**. Choose `orders-db`. If it isn't listed, clear the filter, and look for `orders-db` marked as deleted. If more than one is listed, filter the list by your account ID and Region first: other learners on the same Clumio tenant can have one too. If you restore a copy from another deployment in your account, `./lab check` says so.
 
    ![Clumio, orders-db: Status in AWS Deleted, with its recovery points still on the calendar](../images/5-3-deleted-resource.png)
 
