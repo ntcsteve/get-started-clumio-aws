@@ -8,6 +8,7 @@
   "documents_prefix": "documents/",
   "network": "orders",
   "protection_tag": { "key": "clumio-protection", "value": "orders" },
+  "workshop_tag": { "key": "Workshop", "value": "orders-recovery" },
   "clumio_rds_policy": "orders-rds-{account}-{region}",
   "clumio_s3_policy": "orders-s3-{account}-{region}"
 }

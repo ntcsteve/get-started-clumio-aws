@@ -21,7 +21,8 @@ locals {
     for key, value in local.raw_names : key => replace(replace(value, "{account}", var.account_id), "{region}", var.region)
     if can(tostring(value))
   })
-  tags = merge(var.tags, { Workshop = "orders-recovery" }) # On every AWS resource; ./lab reads them from the tags output.
+  # On every AWS resource. ./lab reads them from the tags output, and deletes only what carries the workshop tag.
+  tags = merge(var.tags, { (local.names.workshop_tag.key) = local.names.workshop_tag.value })
 }
 
 module "app" {

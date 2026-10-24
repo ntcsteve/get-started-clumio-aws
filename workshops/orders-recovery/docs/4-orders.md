@@ -171,7 +171,7 @@ On Aurora, `LOAD DATA FROM S3` loads the file from a bucket instead of your comp
 4A brought the orders back. Now see the way you'd use for wide damage: a full restore beside the live database.
 
 > [!IMPORTANT]
-> Name the restored cluster `orders-db-restore`, as in step 2. `./lab drop` and `./lab down` find restores by the `orders-db-` start of the name, or by the `orders-db` subnet group.
+> Name the restored cluster `orders-db-restore`, as in step 2. `./lab drop` and `./lab down` recognize a restore by the tag `Workshop = orders-recovery`, which it keeps from `orders-db`. They delete nothing without that tag.
 
 1. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. If more than one is listed, filter the list by your account ID and Region first: other learners on the same Clumio tenant can have one too. Then choose the one that's in AWS, not deleted. A restore with **Default** settings goes to the source's account, so the wrong one would land in someone else's.
 

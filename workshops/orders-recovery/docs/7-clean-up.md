@@ -19,7 +19,7 @@ To stop AWS charges, delete everything the workshop created. One command does it
 2. If it says `STOP` instead, fix what the message names, and run `./lab down` again. It is safe to run again: it skips what is already deleted, and waits for what is still being deleted.
 
 > [!NOTE]
-> `./lab down` finds a restored cluster by its subnet group, `orders-db`, or by its name, `orders-db-...`. If you restored a cluster with another name into another subnet group, delete it in the Amazon RDS console.
+> `./lab down` deletes only what carries the tag `Workshop = orders-recovery`. A restore keeps that tag from `orders-db`. If you removed it, or restored with **Custom** tags, delete that cluster in the Amazon RDS console.
 
 > [!NOTE]
 > If `terraform destroy` fails with `error_code 367`, your Clumio tenant doesn't allow deleting AWS connections. Ask your Clumio administrator to delete the connection for this account and Region. Then run `./lab down` again.

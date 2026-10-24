@@ -140,6 +140,8 @@ def cmd_preflight(_args):
             stop(f"{ACCOUNT} in {REGION} is already connected to Clumio. Use another test account or Region")
         if bucket_exists():
             stop(f"bucket {documents_bucket()} already exists. Delete it, or use another account")
+        if describe_cluster(NAMES["cluster"]):
+            stop(f"a cluster named {NAMES['cluster']} already exists in {ACCOUNT}, {REGION}. Use another test account or Region")
     say("READY" + ("" if deployed else ": run terraform init && terraform apply"))
 
 
@@ -276,13 +278,13 @@ def cmd_prepare(args):
 
 def cmd_drop(args):
     # No account ID asked, unlike break everything and down: a dropped copy can be restored again from
-    # Clumio's recovery point. Only a cluster restored_clusters() recognizes can be dropped (named
-    # orders-db-... or in the workshop's subnet group), never the live database.
+    # Clumio's recovery point. Only a cluster restored_clusters() recognizes can be dropped (one with the
+    # workshop tag), never the live database.
     if args.cluster == NAMES["cluster"]:
         stop("that's the live database. ./lab drop only deletes restored clusters")
     if args.cluster not in restored_clusters():
-        stop(f"{args.cluster} isn't a workshop restore (named {NAMES['cluster']}-... or in subnet group "
-             f"{NAMES['subnet_group']}). ./lab drop deletes nothing else")
+        tag = NAMES["workshop_tag"]
+        stop(f"{args.cluster} isn't a workshop restore (tagged {tag['key']} = {tag['value']}). ./lab drop deletes nothing else")
     delete_cluster(args.cluster)
     say(f"{args.cluster} deleted")
 
@@ -736,12 +738,27 @@ def prepare(cluster_id):
          "Check it is Available, then run this again")
 
 
+def has_workshop_tag(tags):
+    """Whether AWS tags ([{"Key": ..., "Value": ...}]) include the workshop tag. Pure. Terraform puts it on
+    everything it builds, and a restore keeps its source's tags, so it marks what the workshop made."""
+    tag = NAMES["workshop_tag"]
+    return {"Key": tag["key"], "Value": tag["value"]} in (tags or [])
+
+
+def not_ours(what):
+    tag = NAMES["workshop_tag"]
+    stop(f"{what} isn't tagged {tag['key']} = {tag['value']}, so the workshop didn't make it. Nothing was deleted")
+
+
 def delete_cluster(cluster_id, keep_instance=None):
     """Deletes a cluster's instances except keep_instance, then the cluster when nothing is kept.
-    Safe to run again after an interruption: what is already being deleted is only waited for."""
+    Safe to run again after an interruption: what is already being deleted is only waited for.
+    Only a cluster with the workshop tag: a name proves nothing."""
     cluster = describe_cluster(cluster_id)
     if cluster is None:
         return
+    if not has_workshop_tag(cluster.get("TagList")):
+        not_ours(f"cluster {cluster_id}")
     members = [m["DBInstanceIdentifier"] for m in cluster["DBClusterMembers"] if m["DBInstanceIdentifier"] != keep_instance]
     for instance in members:
         if instance_status(instance) not in (None, "deleting"):
@@ -763,12 +780,10 @@ def delete_cluster(cluster_id, keep_instance=None):
 
 
 def restored_clusters():
-    """The clusters Clumio restored for the workshop: every cluster other than the main one that is in
-    the workshop's subnet group or named after the main one (orders-db-...). The docs ask for both."""
-    main = NAMES["cluster"]
+    """The clusters Clumio restored for the workshop: every cluster with the workshop tag other than the
+    live one. A restore keeps its source's tags (seen live), whatever name it gets."""
     return [c["DBClusterIdentifier"] for c in aws("rds", "describe-db-clusters")["DBClusters"]
-            if c["DBClusterIdentifier"] != main
-            and (c.get("DBSubnetGroup") == NAMES["subnet_group"] or c["DBClusterIdentifier"].startswith(main + "-"))]
+            if c["DBClusterIdentifier"] != NAMES["cluster"] and has_workshop_tag(c.get("TagList"))]
 
 
 # --- Documents bucket ----------------------------------------------------------------------------
@@ -789,6 +804,9 @@ def upload_documents(texts_by_order):
 def empty_and_delete_bucket():
     if not bucket_exists():
         return
+    tagging = aws("s3api", "get-bucket-tagging", "--bucket", documents_bucket(), absent_if=("NoSuchTagSet",))
+    if not has_workshop_tag((tagging or {}).get("TagSet")):
+        not_ours(f"bucket {documents_bucket()}")
     say(f"deleting every object version in {documents_bucket()}")
     for _ in range(100):  # 1,000 keys per pass; this workshop needs a few passes at most
         page = aws("s3api", "list-object-versions", "--bucket", documents_bucket(), "--max-keys", "1000", "--no-paginate")

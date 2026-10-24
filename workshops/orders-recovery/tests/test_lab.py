@@ -953,6 +953,78 @@ class Names(unittest.TestCase):
         self.assertLessEqual(len(names["bucket"]), 63)
 
 
+class OnlyWhatTheWorkshopMade(unittest.TestCase):
+    """lab deletes a cluster or the bucket only when it carries the workshop's tag. A name proves
+    nothing: an account can already hold an orders-db, or an orders-db-prod, that isn't ours."""
+
+    OURS = [{"Key": "Workshop", "Value": "orders-recovery"}, {"Key": "clumio-protection", "Value": "orders"}]
+
+    def stubbed(self, stubs, call):
+        saved = {name: getattr(lab, name) for name in stubs}
+        for name, stub in stubs.items():
+            setattr(lab, name, stub)
+        error = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(error):
+                return call(), error.getvalue()
+        except SystemExit:
+            return "STOP", error.getvalue()
+        finally:
+            for name, original in saved.items():
+                setattr(lab, name, original)
+
+    def test_names_json_names_the_workshop_tag(self):
+        with open(os.path.join(HERE, "..", "names.json")) as file:
+            self.assertEqual(json.load(file)["workshop_tag"], {"key": "Workshop", "value": "orders-recovery"})
+
+    def test_a_restore_is_a_tagged_cluster_other_than_the_live_one(self):
+        clusters = {"DBClusters": [
+            {"DBClusterIdentifier": "orders-db", "DBSubnetGroup": "orders-db", "TagList": self.OURS},
+            {"DBClusterIdentifier": "orders-db-restore", "DBSubnetGroup": "orders-db", "TagList": self.OURS},
+            {"DBClusterIdentifier": "restored-orders-db-1792831984188", "DBSubnetGroup": "orders-db", "TagList": self.OURS},
+            {"DBClusterIdentifier": "orders-db-prod", "DBSubnetGroup": "orders-db", "TagList": []}]}
+        found, _ = self.stubbed({"aws": lambda *_a, **_k: clusters}, lab.restored_clusters)
+        self.assertEqual(found, ["orders-db-restore", "restored-orders-db-1792831984188"])
+
+    def test_an_untagged_cluster_is_never_deleted(self):
+        calls = []
+        cluster = {"DBClusterIdentifier": "orders-db", "Status": "available", "TagList": [],
+                   "DBClusterMembers": [{"DBInstanceIdentifier": "orders-db-1"}]}
+        outcome, error = self.stubbed({"describe_cluster": lambda _c: cluster, "aws": lambda *a, **_k: calls.append(a),
+                                       "run": lambda *a, **_k: calls.append(a), "WAIT_ROUNDS": 1,
+                                       "instance_status": lambda _i: "available"}, lambda: lab.delete_cluster("orders-db"))
+        self.assertEqual((outcome, calls), ("STOP", []))
+        self.assertIn("isn't tagged Workshop = orders-recovery", error)
+        self.assertIn("Nothing was deleted", error)
+
+    def test_an_untagged_bucket_is_never_emptied(self):
+        calls = []
+
+        def fake_aws(*args, **_kwargs):
+            calls.append(args[1])
+            return {"TagSet": [{"Key": "Team", "Value": "payments"}]} if args[1] == "get-bucket-tagging" else {}
+        outcome, error = self.stubbed({"bucket_exists": lambda: True, "aws": fake_aws}, lab.empty_and_delete_bucket)
+        self.assertEqual((outcome, calls), ("STOP", ["get-bucket-tagging"]))
+        self.assertIn("Nothing was deleted", error)
+
+    def test_preflight_refuses_an_existing_orders_db(self):
+        import types
+        stubs = {"shutil": types.SimpleNamespace(which=lambda _t: "/usr/bin/x"),
+                 "run": lambda *a, **_k: types.SimpleNamespace(stdout="aws-cli/2.30.0" if "--version" in a else ""),
+                 "aws": lambda *_a, **_k: {"DBEngineVersions": [{"EngineVersion": "8.0.mysql_aurora.3.10.3"}]},
+                 "get_clumio": lambda _p: (200, {}), "clumio_items": lambda _p: [{"id": "ap-southeast-2"}],
+                 "is_clumio_connected": lambda: False, "bucket_exists": lambda: False,
+                 "describe_cluster": lambda _c: {"DBClusterIdentifier": "orders-db", "TagList": []}}
+        saved_region = lab.REGION
+        lab.REGION = "ap-southeast-2"
+        try:
+            outcome, error = self.stubbed(stubs, lambda: lab.cmd_preflight(None))
+        finally:
+            lab.REGION = saved_region
+        self.assertEqual(outcome, "STOP")
+        self.assertIn("orders-db already exists", error)
+
+
 class Deployment(unittest.TestCase):
     """Clumio keeps old entries with the same name, and every run loads the same sample data. So a
     restore of another deployment's copy would look HEALTHY. The deployment ID tells them apart."""

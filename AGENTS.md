@@ -38,7 +38,7 @@ This repository sets Clumio up on AWS with Terraform, and teaches recovery with 
 
 **Git.** The remote is public. Commit only when the person asks, stage named paths, and never push without their go. Never commit `terraform.tfvars`, state, `.lab/`, or an account ID: examples use `123456789012` or `111122223333`.
 
-**Names are unique in their scope:** the account and Region for AWS resources, the tenant for Clumio, and the world for S3 buckets. The workshop's names live in `workshops/orders-recovery/names.json`. A name with a wider scope carries `{account}` and `{region}`, which Terraform and `lab` fill in. Code may add a suffix inside one account, such as a subnet's number, but never composes a name with a wider scope. The kit's modules name their policies `rds-<account>-<region>` and `s3-<account>-<region>`, unless a step sets `name`. Where a list keeps old entries under the same name, as Clumio does, the code verifies what was picked.
+**Names are unique in their scope:** the account and Region for AWS resources, the tenant for Clumio, and the world for S3 buckets. The workshop's names live in `workshops/orders-recovery/names.json`. A name with a wider scope carries `{account}` and `{region}`, which Terraform and `lab` fill in. Code may add a suffix inside one account, such as a subnet's number, but never composes a name with a wider scope. The kit's modules name their policies `rds-<account>-<region>` and `s3-<account>-<region>`, unless a step sets `name`. Where a list keeps old entries under the same name, as Clumio does, the code verifies what was picked. Code deletes only what carries the workshop tag, never by name alone.
 
 **Write the docs like a book:**
 
