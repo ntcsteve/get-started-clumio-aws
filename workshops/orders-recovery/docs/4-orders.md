@@ -15,7 +15,7 @@ The bad deployment deleted 100 orders. Customers kept ordering since, so rolling
 
 **Requires:** the archive recovery point from [Module 1, step 7](1-deploy.md#wait-for-the-first-recovery-points), ready to query. It was taken before the bad deployment, so it holds every order the bad deployment deleted.
 
-1. Open **Record restore**: from Clumio's email, or in the Clumio console under **AWS**, **Inventory**, **RDS resources**, `orders-db`, by choosing **Restore** on that archive recovery point.
+1. Open **Record restore**: from Clumio's email, or in the Clumio console under **AWS**, **Inventory**, **RDS resources**, `orders-db`, by choosing **Restore** on that archive recovery point. If Clumio lists more than one `orders-db`, filter the list by your account ID and Region first.
 
    Clumio offers **Prepare records for restore** instead? The point is in cold storage. Choose it, and come back when Clumio emails that it's ready, which can take up to 48 hours. If no archive recovery point is from before the change time, use 4B.
 
@@ -173,7 +173,7 @@ On Aurora, `LOAD DATA FROM S3` loads the file from a bucket instead of your comp
 > [!IMPORTANT]
 > Name the restored cluster `orders-db-restore`, as in step 2. `./lab drop` and `./lab down` find restores by the `orders-db-` start of the name, or by the `orders-db` subnet group.
 
-1. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`.
+1. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. If more than one is listed, filter the list by your account ID and Region first: other learners, or an earlier run, can have one too. Then choose the one that's in AWS, not deleted. A restore with **Default** settings goes to the source's account, so the wrong one would land in someone else's.
 
 2. Choose the last SecureVault Standard recovery point before the change time, then **Restore**. Choose **Default** first, then enter `orders-db-restore` for **Aurora cluster name**. Switching between **Default** and **Custom** clears the name, so check it before you choose **Restore**.
 

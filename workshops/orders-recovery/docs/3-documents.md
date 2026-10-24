@@ -6,9 +6,9 @@ The bad deployment overwrote 50 documents, but the bucket still exists, and S3 V
 
 **With S3 Versioning alone:** the old versions are kept, but bringing them back means finding the right version of each object and copying it over the current one, object by object, with a script you write during the incident.
 
-1. In the Clumio console, choose **AWS**, **Protect**, **S3**, **Protection Groups**. Choose `orders-s3-<account ID>`.
+1. In the Clumio console, choose **AWS**, **Protect**, **S3**, **Protection Groups**. Choose `orders-s3-<account ID>-<region>`.
 
-2. On the **Backtrack** tab, choose **Backtrack**, then **Roll back**. Select the bucket `orders-documents-<account ID>`.
+2. On the **Backtrack** tab, choose **Backtrack**, then **Roll back**. Select the bucket `orders-documents-<account ID>-<region>`.
 
 3. Select the date and time to roll back to. The form says how far it can go: any point up to the last sync. Choose a time before the change time from Module 2, and as close to it as the form allows. In the test run, the last sync was 2 hours before the bad deployment, so that sync was the point. A document written between that point and the bad deployment would roll back too, to its version at that point. For the object key filter, choose **Object key begins with**, and enter `documents/`.
 

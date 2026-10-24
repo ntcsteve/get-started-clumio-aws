@@ -2,7 +2,7 @@
 # comes from names.json, which ./lab reads too.
 
 locals {
-  documents_bucket = "${var.names.bucket_prefix}${var.account_id}"
+  documents_bucket = var.names.bucket
   protection_tags  = { (var.names.protection_tag.key) = var.names.protection_tag.value }
   db_username      = "ordersadmin" # In the secret and on the cluster; restores keep it, so the secret keeps working.
 }

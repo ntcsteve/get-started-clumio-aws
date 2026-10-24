@@ -17,7 +17,7 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
 
    | Part | What it is |
    |---|---|
-   | Application | A private network, the Aurora cluster `orders-db` with its login secret, and the S3 bucket `orders-documents-<account ID>` |
+   | Application | A private network, the Aurora cluster `orders-db` with its login secret, and the S3 bucket `orders-documents-<account ID>-<region>` |
    | Sample data | 1,000 orders and 1,000 delivery documents, loaded by `./lab seed` once the application is built |
    | Clumio connection | Clumio's connection to this account and Region, with the IAM roles Clumio uses |
    | Clumio policies | One for the database and one for the bucket, created last. Each protects every resource tagged `clumio-protection = orders` |
@@ -25,7 +25,7 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
    **You should see**, among the output, the data being loaded, then `Apply complete!`:
 
    ```text
-   terraform_data.sample_data (local-exec): [06:32:21 UTC] Seeded 1,000 orders and 1,000 documents. Next: ./lab check
+   terraform_data.sample_data (local-exec): [06:32:21 UTC] Seeded 1,000 orders and 1,000 documents, deployment 7f3a9c21. Next: ./lab check
    ```
 
    This is the database's protection, from `main.tf`, abridged. Production uses the same module.
@@ -80,7 +80,7 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
 
 ## See what Clumio protects
 
-4. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. Its page shows the policy `orders-rds-<account ID>`, and a calendar with its recovery points. Then choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>`, and choose the bucket. Its page shows the protection group, the policy, and the objects backed up. Clumio found both by their tag. A new database or bucket with the same tag would be protected too, with no change to the code.
+4. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. Its page shows the policy `orders-rds-<account ID>-<region>`, and a calendar with its recovery points. Then choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>-<region>`, and choose the bucket. Its page shows the protection group, the policy, and the objects backed up. Clumio found both by their tag. A new database or bucket with the same tag would be protected too, with no change to the code.
 
    ![Clumio, orders-db: its policy orders-rds and the first recovery points on the calendar](../images/1-2-rds-resources.png)
 
@@ -98,9 +98,12 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
    ./lab status
    ```
 
+   The first line names this deployment, by an ID that `./lab seed` wrote into the database, and the day it loaded the data. If Clumio lists more than one `orders-db` later, your account ID and this time tell you which is yours.
+
    **You should see** `ready for the incidents  yes` on the last line. If it says `no`, it names what's missing: wait, and run the command again later. In the test run, the documents' first recovery point was there within 3 minutes, and both of the database's within 25 minutes of its policy taking effect.
 
    ```text
+     deployment               7f3a9c21, seeded 2026-10-24 06:32 UTC
      database in Clumio       found
        protected by           the workshop's policy
        SecureVault Standard   2026-10-24T06:50:52Z
@@ -112,7 +115,7 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
 
    `ready` waits for all three: the database's Standard and Archive recovery points, and the documents'. `./lab break` checks the same thing, and refuses to start an incident before Clumio holds a copy to recover from.
 
-6. In the Clumio console, choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>`. Open the **Backtrack** tab.
+6. In the Clumio console, choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>-<region>`. Open the **Backtrack** tab.
 
    **You should see** a date and time for **Last sync**, and `1,000` for **Objects under management**. If the tab says **Waiting for Inventory**, Backtrack hasn't synced yet. Its first sync can take up to 48 hours, and only the console shows it. In the test run, it synced 3 minutes after the data was loaded.
 

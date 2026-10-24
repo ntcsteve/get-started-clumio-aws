@@ -788,8 +788,9 @@ class CheckReadsTheDatabase(unittest.TestCase):
         def no_probe(_cluster_id):
             raise AssertionError("./lab check must not probe the Data API")
         saved = (lab.describe_cluster, lab.describe_secret, lab.query_readiness, lab.run, lab.time.sleep, lab.say,
-                 lab._secret_arn, lab.REGION, lab.SCHEMA_FILE)
+                 lab._secret_arn, lab.REGION, lab.SCHEMA_FILE, lab.read_events)
         lab.describe_cluster, lab.describe_secret, lab.query_readiness = (lambda _c: cluster), (lambda: "arn:secret"), no_probe
+        lab.read_events = lambda: []  # not this computer's real evidence log
         lab.run, lab.time.sleep, lab.say = fake_run, (lambda _s: None), (lambda _m: None)
         lab._secret_arn, lab.REGION, lab.SCHEMA_FILE = "arn:secret", "ap-southeast-2", "/nonexistent/schema.json"
         findings = {}
@@ -798,7 +799,7 @@ class CheckReadsTheDatabase(unittest.TestCase):
                 return lab.read_database(findings), findings
         finally:
             (lab.describe_cluster, lab.describe_secret, lab.query_readiness, lab.run, lab.time.sleep, lab.say,
-             lab._secret_arn, lab.REGION, lab.SCHEMA_FILE) = saved
+             lab._secret_arn, lab.REGION, lab.SCHEMA_FILE, lab.read_events) = saved
 
     def test_no_instance_or_data_api_off_means_prepare(self):
         for cluster in (dict(self.READY, DBClusterMembers=[]), dict(self.READY, HttpEndpointEnabled=False)):
@@ -811,6 +812,27 @@ class CheckReadsTheDatabase(unittest.TestCase):
         rows, findings = self.read(self.READY, failures=1)
         self.assertEqual(list(rows), [1])
         self.assertNotIn("database", findings)
+
+    def test_the_check_compares_the_databases_deployment_with_the_log(self):
+        import types
+        seeded = [{"at": "2026-10-25T10:00:00+00:00", "event": "seed", "deployment": "aaaa1111"}]
+        for in_database, expected in (("aaaa1111", None), ("bbbb2222", "from another deployment (bbbb2222). Restore a copy of deployment aaaa1111")):
+            def fake_run(*command, expect_failure=False):
+                statement = command[command.index("--sql") + 1]
+                record = {"id": in_database} if "FROM deployment" in statement else {"id": 1}
+                return types.SimpleNamespace(returncode=0, stdout=json.dumps({"formattedRecords": json.dumps([record])}), stderr="")
+            saved = (lab.describe_cluster, lab.describe_secret, lab.run, lab.read_events, lab._secret_arn, lab.REGION, lab.SCHEMA_FILE)
+            lab.describe_cluster, lab.describe_secret, lab.run = (lambda _c: self.READY), (lambda: "arn:secret"), fake_run
+            lab.read_events, lab._secret_arn, lab.REGION, lab.SCHEMA_FILE = (lambda: seeded), "arn:secret", "ap-southeast-2", "/nonexistent"
+            findings = {}
+            try:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    lab.read_database(findings)
+            finally:
+                (lab.describe_cluster, lab.describe_secret, lab.run, lab.read_events, lab._secret_arn, lab.REGION,
+                 lab.SCHEMA_FILE) = saved
+            with self.subTest(in_database=in_database):
+                self.assertEqual(findings.get("deployment"), expected)
 
     def test_another_not_queryable_answer_is_a_finding_not_a_crash(self):
         bad = "aws: [ERROR]: An error occurred (InvalidResourceStateException) when calling the ExecuteStatement operation: the instance is being deleted"
@@ -904,6 +926,88 @@ class ConfirmAccount(unittest.TestCase):
     def test_without_the_flag_a_person_types_it(self):
         self.assertEqual(self.confirm(None, typed="123456789012")[:2], ("go", 1))
         self.assertEqual(self.confirm(None, typed="nope")[:2], ("STOP", 1))
+
+
+class Names(unittest.TestCase):
+    """Every name lives in names.json. A name seen beyond one account and Region, an S3 bucket
+    (global) or a Clumio policy (the whole tenant), carries both, so two workshops never collide."""
+
+    def test_names_with_a_wider_scope_carry_the_account_and_region(self):
+        with open(os.path.join(HERE, "..", "names.json")) as file:
+            names = json.load(file)
+        for key in ("bucket", "clumio_rds_policy", "clumio_s3_policy"):
+            with self.subTest(key=key):
+                self.assertIn("{account}", names[key])
+                self.assertIn("{region}", names[key])
+
+    def test_filling_in_the_account_and_region(self):
+        raw = {"bucket": "orders-documents-{account}-{region}", "cluster": "orders-db",
+               "protection_tag": {"key": "clumio-protection", "value": "orders"}}
+        self.assertEqual(lab.fill_names(raw, "123456789012", "ap-southeast-2"),
+                         {"bucket": "orders-documents-123456789012-ap-southeast-2", "cluster": "orders-db",
+                          "protection_tag": {"key": "clumio-protection", "value": "orders"}})
+
+    def test_the_bucket_name_fits_s3s_limit(self):
+        with open(os.path.join(HERE, "..", "names.json")) as file:
+            names = lab.fill_names(json.load(file), "123456789012", "ap-southeast-2")
+        self.assertLessEqual(len(names["bucket"]), 63)
+
+
+class Deployment(unittest.TestCase):
+    """Clumio keeps old entries with the same name, and every run loads the same sample data. So a
+    restore of another deployment's copy would look HEALTHY. The deployment ID tells them apart."""
+
+    def at(self, minute, event, **details):
+        return {"at": f"2026-10-25T10:{minute:02d}:00+00:00", "event": event, **details}
+
+    def test_this_deployment_is_the_last_seed_since_the_last_down(self):
+        events = [self.at(0, "seed", deployment="aaaa1111"), self.at(5, "down"),
+                  self.at(9, "seed", deployment="bbbb2222"), self.at(12, "check", state="HEALTHY")]
+        self.assertEqual(lab.this_deployment(events), "bbbb2222")
+        self.assertIsNone(lab.this_deployment(events[:2]))
+        self.assertIsNone(lab.this_deployment([]))
+
+    def test_each_state_of_the_copy_has_its_own_finding(self):
+        self.assertIsNone(lab.deployment_finding("bbbb2222", ["bbbb2222"]))
+        self.assertEqual(lab.deployment_finding("bbbb2222", ["aaaa1111"]),
+                         "from another deployment (aaaa1111). Restore a copy of deployment bbbb2222")
+        self.assertEqual(lab.deployment_finding("bbbb2222", []), "missing: this copy has no deployment record")
+        self.assertEqual(lab.deployment_finding(None, ["bbbb2222"]),
+                         "can't tell: this computer has no record of ./lab seed. If it didn't finish, run it again")
+
+    def test_a_wrong_deployment_is_never_fine(self):
+        findings = {"deployment": lab.deployment_finding("bbbb2222", ["aaaa1111"])}
+        self.assertFalse(lab.is_fine("deployment", findings["deployment"]))
+
+    def test_seed_keeps_the_deployment_id_it_already_wrote(self):
+        statements = []
+
+        def fake_sql(_arn, statement, parameters=()):
+            statements.append(statement)
+            return [{"id": "aaaa1111"}] if statement.startswith("SELECT") else []
+        saved = lab.sql
+        lab.sql = fake_sql
+        try:
+            self.assertEqual(lab.ensure_deployment("arn:cluster"), "aaaa1111")
+        finally:
+            lab.sql = saved
+        self.assertFalse(any(s.startswith("INSERT") for s in statements))
+
+    def test_a_first_seed_writes_a_new_deployment_id(self):
+        inserted = []
+
+        def fake_sql(_arn, statement, parameters=()):
+            if statement.startswith("INSERT"):
+                inserted.append(parameters)
+            return []
+        saved = lab.sql
+        lab.sql = fake_sql
+        try:
+            new_id = lab.ensure_deployment("arn:cluster")
+        finally:
+            lab.sql = saved
+        self.assertRegex(new_id, r"^[0-9a-f]{8}$")
+        self.assertEqual(len(inserted), 1)
 
 
 class MissingSecret(unittest.TestCase):

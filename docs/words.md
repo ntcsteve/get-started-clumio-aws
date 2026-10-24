@@ -53,6 +53,7 @@ Part of [Get started with Clumio on AWS](../README.md). New to AWS or Clumio? Re
 | Deploy role | The AWS identity that runs step 1 and creates Clumio's IAM roles. |
 | `terraform.tfvars` | Your settings for a step. You copy it from `terraform.tfvars.example`. |
 | `./lab` | The workshop's command. Every command checks first, and says what to do next. |
+| Deployment ID | A short random ID that `./lab seed` writes into the database. `./lab status` shows it, and `./lab check` uses it to tell this run's copy from an older one. |
 | HEALTHY or BROKEN | What `./lab check` says: whether every order is there, unchanged, with its intact document. |
 | Control order | Order 1. The bad deployment doesn't touch it, so a correct recovery leaves it unchanged. |
 | Change time | The time the workshop's bad deployment ran. You recover to a point before it. |

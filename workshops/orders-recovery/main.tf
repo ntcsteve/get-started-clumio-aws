@@ -14,14 +14,19 @@ provider "aws" {
 provider "clumio" {}
 
 locals {
-  names = jsondecode(file("${path.module}/names.json"))     # Shared with ./lab, so neither repeats a name.
-  tags  = merge(var.tags, { Workshop = "orders-recovery" }) # On every AWS resource; ./lab reads them from the tags output.
+  # Every name, from names.json, shared with ./lab so neither repeats one. A name may use {account} and
+  # {region}; both are filled in here, as ./lab's fill_names() does, so no other code composes a name.
+  raw_names = jsondecode(file("${path.module}/names.json"))
+  names = merge(local.raw_names, {
+    for key, value in local.raw_names : key => replace(replace(value, "{account}", var.account_id), "{region}", var.region)
+    if can(tostring(value))
+  })
+  tags = merge(var.tags, { Workshop = "orders-recovery" }) # On every AWS resource; ./lab reads them from the tags output.
 }
 
 module "app" {
-  source     = "./app"
-  names      = local.names
-  account_id = var.account_id
+  source = "./app"
+  names  = local.names
 }
 
 # Workshop only: loads the sample data before the Clumio policies exist, so Clumio's first recovery
@@ -60,7 +65,7 @@ module "rds_protection" {
   depends_on   = [module.clumio_iam, terraform_data.sample_data]
   account_id   = var.account_id
   region       = var.region
-  name         = "${local.names.clumio_rds_policy_prefix}${var.account_id}" # Unique per account, so learners can share a tenant.
+  name         = local.names.clumio_rds_policy
   protect_by   = "tag"
   database_tag = local.names.protection_tag
 
@@ -75,7 +80,7 @@ module "s3_protection" {
   depends_on = [module.clumio_iam, terraform_data.sample_data]
   account_id = var.account_id
   region     = var.region
-  name       = "${local.names.clumio_s3_policy_prefix}${var.account_id}"
+  name       = local.names.clumio_s3_policy
   protect_by = "tag"
   bucket_tag = local.names.protection_tag
 

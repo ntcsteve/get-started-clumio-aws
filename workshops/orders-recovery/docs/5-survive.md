@@ -50,7 +50,7 @@ Next, the worst case. Anything with enough access to the account can delete the 
 
 To bring the application back unchanged, restore the database under its original name, `orders-db`. The application and `./lab` find the database by name, so nothing else needs to change.
 
-5. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**. Filter **Status in AWS** to **Deleted resources**. Choose `orders-db`. If it isn't listed, clear the filter, and look for `orders-db` marked as deleted.
+5. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**. Filter **Status in AWS** to **Deleted resources**. Choose `orders-db`. If it isn't listed, clear the filter, and look for `orders-db` marked as deleted. If more than one is listed, filter the list by your account ID and Region first: other learners, or an earlier run, can have one too. Then choose the one with recovery points from after the seed time that `./lab status` shows on its `deployment` line. That time is in UTC, and the console shows your browser's time zone. If you choose another run's copy, `./lab check` says so after the restore.
 
    ![Clumio, orders-db: Status in AWS Deleted, with its recovery points still on the calendar](../images/5-3-deleted-resource.png)
 
@@ -84,16 +84,16 @@ A SecureVault restore for S3 writes into a bucket that exists, and that Clumio a
    **You should see:**
 
    ```text
-   orders-documents-<account ID> recreated, empty and tagged for Clumio. Next: wait until Clumio lists it, then restore into it
+   orders-documents-<account ID>-<region> recreated, empty and tagged for Clumio. Next: wait until Clumio lists it, then restore into it
    ```
 
-9. In the Clumio console, choose **AWS**, **Inventory**, **S3 buckets**. Wait until `orders-documents-<account ID>` is listed again. This can take up to an hour. In the test run, it took 5 minutes. The deleted bucket stays listed too, with its **Restore** greyed out: its recovery points are on the protection group, the next step.
+9. In the Clumio console, choose **AWS**, **Inventory**, **S3 buckets**. Wait until `orders-documents-<account ID>-<region>` is listed again. This can take up to an hour. In the test run, it took 5 minutes. The deleted bucket stays listed too, with its **Restore** greyed out: its recovery points are on the protection group, the next step.
 
-10. Choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>`. In the calendar, find the latest backup from before the change time. It may be on an earlier date, since the backup runs once a day. A newer backup can be listed too: it's of the empty rebuilt bucket, which the workshop's policy protected at once, because it has the tag. Choose the one from before the change time, then its **Restore** menu, then **Restore prefix/buckets**.
+10. Choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>-<region>`. In the calendar, find the latest backup from before the change time. It may be on an earlier date, since the backup runs once a day. A newer backup can be listed too: it's of the empty rebuilt bucket, which the workshop's policy protected at once, because it has the tag. Choose the one from before the change time, then its **Restore** menu, then **Restore prefix/buckets**.
 
     ![Clumio protection group orders-s3: two backups on one day, of the empty rebuilt bucket at 08:05 pm and of the documents at 02:35 pm](../images/extra-5-protection-group-points.png)
 
-11. Select the bucket `orders-documents-<account ID>` from the backup. It shows 1,000 objects. Skip the object preview, so every object is restored. Under **Restore to**, choose **Custom**, not **Source**. **Source** means the bucket that was deleted, and Clumio refuses it with Error 111. Keep the account and Region from the source. For **Bucket name**, choose `orders-documents-<account ID>`, the bucket you rebuilt. Leave **Prefix to restore data at** empty. Choose **Restore**. In the test run, the restore took 4 minutes.
+11. Select the bucket `orders-documents-<account ID>-<region>` from the backup. It shows 1,000 objects. Skip the object preview, so every object is restored. Under **Restore to**, choose **Custom**, not **Source**. **Source** means the bucket that was deleted, and Clumio refuses it with Error 111. Keep the account and Region from the source. For **Bucket name**, choose `orders-documents-<account ID>-<region>`, the bucket you rebuilt. Leave **Prefix to restore data at** empty. Choose **Restore**. In the test run, the restore took 4 minutes.
 
     ![Clumio S3 restore, Custom destination: this account and Region, the rebuilt bucket orders-documents, Prefix empty](../images/5-4-restore-documents.png)
 

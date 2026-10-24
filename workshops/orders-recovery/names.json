@@ -4,10 +4,10 @@
   "subnet_group": "orders-db",
   "database": "orders",
   "login_secret": "orders/db-login",
-  "bucket_prefix": "orders-documents-",
+  "bucket": "orders-documents-{account}-{region}",
   "documents_prefix": "documents/",
   "network": "orders",
   "protection_tag": { "key": "clumio-protection", "value": "orders" },
-  "clumio_rds_policy_prefix": "orders-rds-",
-  "clumio_s3_policy_prefix": "orders-s3-"
+  "clumio_rds_policy": "orders-rds-{account}-{region}",
+  "clumio_s3_policy": "orders-s3-{account}-{region}"
 }

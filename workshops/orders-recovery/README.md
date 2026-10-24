@@ -122,7 +122,7 @@ The workshop runs one Aurora `db.r6g.large` instance. Module 4B adds a restored 
 | `lab` | The workshop's commands. Every command checks first, and says what to do next |
 | `main.tf` | The workshop: the application, its data, the Clumio connection, and two Clumio policies |
 | `app/` | The application: network, Aurora cluster, and S3 bucket |
-| `names.json` | Every resource name, shared by Terraform and `lab`. Change them only if your organization's naming rules require it: the guide shows the defaults |
+| `names.json` | Every resource name, shared by Terraform and `lab`. `{account}` and `{region}` are filled in from `terraform.tfvars`. Change the names only if your organization's naming rules require it: the guide shows the defaults |
 | `terraform.tfvars.example` | Your settings: the test account and the Region |
 | `docs/` | The workshop, one page per module |
 | `AGENTS.md` | For an AI agent that runs the commands: the safety rules, and the run in order |

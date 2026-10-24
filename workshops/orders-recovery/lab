@@ -32,6 +32,7 @@ import html
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -45,7 +46,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 EVIDENCE_DIR = os.path.join(HERE, ".lab")
 with open(os.path.join(HERE, "names.json")) as names_file:
-    NAMES = json.load(names_file)
+    NAMES = json.load(names_file)  # {account} and {region} stay in until load_settings() fills them
 ORDER_IDS = range(1, 1001)
 CONTROL_ORDER = 1  # the bad deployment doesn't touch it, so a correct recovery leaves it as it was
 DELETED_BY_DEPLOY = [i for i in ORDER_IDS if i % 10 == 0]               # 100 orders
@@ -154,12 +155,13 @@ def cmd_seed(_args):
              "document_key VARCHAR(80) NOT NULL, document_sha256 CHAR(64) NOT NULL, INDEX by_placed_at (placed_at)) "
              "CHARACTER SET utf8mb4")
     insert_orders(arn, [order_for(i) for i in ORDER_IDS])
+    deployment = ensure_deployment(arn)
     os.makedirs(EVIDENCE_DIR, exist_ok=True)
     with open(SCHEMA_FILE, "w") as file:  # every later ./lab check compares the schema with this copy
         json.dump(read_schema(arn), file, indent=1)
     upload_documents({i: document_for(i) for i in ORDER_IDS})
-    record("seed")
-    say("Seeded 1,000 orders and 1,000 documents. Next: ./lab check")
+    record("seed", deployment=deployment)
+    say(f"Seeded 1,000 orders and 1,000 documents, deployment {deployment}. Next: ./lab check")
 
 
 def cmd_check(_args):
@@ -194,6 +196,9 @@ def cmd_portal(args):
 def cmd_status(_args):
     """Clumio's latest recovery points of the database and the documents, and whether the
     incidents can start. Backtrack's sync shows only in the Clumio console."""
+    deployment, seeded_at = this_deployment(read_events()), last_seed_time()
+    print(f"  deployment               " + (f"{deployment}, seeded {parse_time(seeded_at):%Y-%m-%d %H:%M} UTC"
+                                           if deployment else "none yet: terraform apply runs ./lab seed"))
     database = database_in_clumio()
     database_points = latest_database_recovery_points(database)
     documents_point = latest_documents_recovery_point()
@@ -372,8 +377,7 @@ def cmd_down(args):
         left.append(f"secret {NAMES['login_secret']}")
     if is_clumio_connected():
         left.append("Clumio connection")
-    for prefix in ("clumio_rds_policy_prefix", "clumio_s3_policy_prefix"):
-        name = f"{NAMES[prefix]}{ACCOUNT}"
+    for name in (NAMES["clumio_rds_policy"], NAMES["clumio_s3_policy"]):
         if clumio_items("/policies/definitions?filter=" + clumio_filter({"name": {"$eq": name}})):
             left.append(f"Clumio policy {name}")
     if left:
@@ -425,12 +429,20 @@ def is_archive_on():
 
 
 def load_settings():
-    global ACCOUNT, REGION
+    global ACCOUNT, REGION, NAMES
     ACCOUNT, REGION = read_setting("account_id"), read_setting("region")
     if not re.fullmatch(r"\d{12}", ACCOUNT):
         stop("set account_id in terraform.tfvars to your 12-digit test account ID")
     if not re.fullmatch(r"[a-z]{2}-[a-z]+-\d", REGION):  # commercial Regions only
         stop("set region in terraform.tfvars, such as ap-southeast-1")
+    NAMES = fill_names(NAMES, ACCOUNT, REGION)
+
+
+def fill_names(names, account, region):
+    """names.json with {account} and {region} filled in, as main.tf does. Pure. No other code composes a
+    name, so a naming change is one edit in names.json."""
+    return {key: value.replace("{account}", account).replace("{region}", region) if isinstance(value, str) else value
+            for key, value in names.items()}
 
 
 def workshop_tags():
@@ -439,7 +451,7 @@ def workshop_tags():
 
 
 def documents_bucket():
-    return f"{NAMES['bucket_prefix']}{ACCOUNT}"
+    return NAMES["bucket"]
 
 
 def document_key(order_id):
@@ -659,6 +671,20 @@ INSERT_ORDER_SQL = ("INSERT IGNORE INTO orders (id, customer, total, status, not
                     "VALUES (:id, :customer, :total, :status, :note, :placed_at, :document_key, :document_sha256)")
 
 
+def ensure_deployment(cluster_arn):
+    """The database's deployment ID: the one already written, or a new random one. A one-row table,
+    so a restore carries it, and ./lab check can tell this deployment's copy from an older one
+    (Clumio keeps old copies under the same name, and every run loads the same sample data)."""
+    sql(cluster_arn, "CREATE TABLE IF NOT EXISTS deployment (id CHAR(8) PRIMARY KEY)")
+    rows = sql(cluster_arn, "SELECT id FROM deployment")
+    if rows:
+        return rows[0]["id"]
+    new_id = secrets.token_hex(4)
+    sql(cluster_arn, "INSERT INTO deployment (id) VALUES (:id)",
+        [{"name": "id", "value": {"stringValue": new_id}}])
+    return new_id
+
+
 def insert_orders(cluster_arn, orders):
     """Inserts orders with parameters, in batches. Rows that already exist stay as they are."""
     for start in range(0, len(orders), ROWS_PER_INSERT):
@@ -793,8 +819,7 @@ def database_in_clumio():
 
 def our_rds_policy_id():
     """The ID of the workshop's own RDS policy, or None before Terraform creates it."""
-    name = f"{NAMES['clumio_rds_policy_prefix']}{ACCOUNT}"
-    policies = clumio_items("/policies/definitions?filter=" + clumio_filter({"name": {"$eq": name}}))
+    policies = clumio_items("/policies/definitions?filter=" + clumio_filter({"name": {"$eq": NAMES["clumio_rds_policy"]}}))
     return policies[0]["id"] if policies else None
 
 
@@ -840,7 +865,7 @@ def latest_documents_recovery_point():
     """The start time of the documents' latest SecureVault backup: "" if none yet, None if Clumio
     hasn't made the protection group yet."""
     groups = clumio_items("/datasources/protection-groups?filter=" + clumio_filter(
-        {"name": {"$eq": f"{NAMES['clumio_s3_policy_prefix']}{ACCOUNT}"}, "is_deleted": {"$eq": False}}))
+        {"name": {"$eq": NAMES["clumio_s3_policy"]}, "is_deleted": {"$eq": False}}))
     if not groups:
         return None
     backups = clumio_items("/backups/protection-groups?limit=100&filter=" + clumio_filter(
@@ -880,6 +905,11 @@ def read_events():
 def since_last_down(events):
     """The events of this deployment: everything after the last ./lab down."""
     return events[max((i for i, e in enumerate(events) if e["event"] == "down"), default=-1) + 1:]
+
+
+def this_deployment(events):
+    """This deployment's ID, from the last ./lab seed since the last ./lab down, or None. Pure."""
+    return next((e.get("deployment") for e in reversed(since_last_down(events)) if e["event"] == "seed"), None)
 
 
 def last_seed_time():
@@ -1032,6 +1062,12 @@ def read_database(findings):
     if not json.loads(response.get("formattedRecords") or "[]"):
         findings["orders table"] = "missing: run ./lab seed"
         return None
+    has_record = sql(arn, "SELECT 1 AS found FROM information_schema.tables "
+                          "WHERE table_schema = DATABASE() AND table_name = 'deployment'")
+    found = [r["id"] for r in sql(arn, "SELECT id FROM deployment ORDER BY id")] if has_record else []
+    wrong_copy = deployment_finding(this_deployment(read_events()), found)
+    if wrong_copy:
+        findings["deployment"] = wrong_copy
     findings["schema"] = schema_finding(arn)
     findings["totals"] = sql(arn, TOTALS_SQL)[0]
     return {int(r["id"]): r for r in sql(arn, f"SELECT {', '.join(ORDER_COLUMNS)} FROM orders")}
@@ -1108,6 +1144,18 @@ def judge(orders, documents, findings):
                   and (documents or {}).get(CONTROL_ORDER) == sha256(document_for(CONTROL_ORDER)))
     findings[f"control order {CONTROL_ORDER}"] = "intact" if control_ok else "BROKEN"
     return all(is_fine(name, value) for name, value in findings.items())
+
+
+def deployment_finding(expected, found):
+    """None when the database is this deployment's, else what's wrong. Pure. expected: this deployment's
+    ID from the evidence log, or None. found: the IDs in the database's deployment table."""
+    if expected is None:
+        return "can't tell: this computer has no record of ./lab seed. If it didn't finish, run it again"
+    if not found:
+        return "missing: this copy has no deployment record"
+    if found != [expected]:
+        return f"from another deployment ({', '.join(found)}). Restore a copy of deployment {expected}"
+    return None
 
 
 def is_fine(name, value):
