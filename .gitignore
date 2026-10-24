@@ -1,3 +1,6 @@
+# Your settings: copied from each step's terraform.tfvars.example, never committed
+terraform.tfvars
+
 # Terraform working files and state (state holds the connection token and ExternalId)
 .terraform/
 *.tfstate

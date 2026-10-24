@@ -6,10 +6,10 @@
 #
 #   ./preview.sh [--connect ../1-connect-clumio] [--as <role ARN>]
 #
-# Account and region come from 1-connect-clumio's terraform.tfvars; log in to that account.
-# --as checks another identity (e.g. the CI/CD deploy role) instead of your own login.
+# Account and Region come from 1-connect-clumio's terraform.tfvars; sign in to that account.
+# --as checks another identity (such as the CI/CD deploy role) instead of your own.
 # Runs `terraform plan` only, in a throwaway folder that is deleted afterwards, so there
-# is nothing left to apply. Needs: a read-only AWS login, terraform, python3.
+# is nothing left to apply. Needs: an AWS sign-in (read-only is enough), terraform, python3.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -32,19 +32,24 @@ while [ $# -gt 0 ]; do
 done
 
 # --- Check inputs before touching anything -------------------------------------
-for f in main.tf variables.tf versions.tf terraform.tfvars; do
+for f in main.tf variables.tf versions.tf; do
   [ -f "$CONNECT/$f" ] || fail "$CONNECT/$f not found (point --connect at the 1-connect-clumio folder)"
 done
-# The module version is pinned in 1-connect-clumio/main.tf, on the line after its source.
-MODULE_VERSION="$(awk '/source *= *"clumio-code\/aws-template\/clumio"/ { getline; print }' "$CONNECT/main.tf" \
+[ -f "$CONNECT/terraform.tfvars" ] \
+  || fail "$CONNECT/terraform.tfvars not found. Create it: cp terraform.tfvars.example terraform.tfvars, in that folder"
+# Clumio's template version is pinned once, in the shared module step 1 calls, on the line after
+# its source.
+SHARED="$CONNECT/../modules/clumio-account-iam/main.tf"
+[ -f "$SHARED" ] || fail "$SHARED not found (step 1's shared module)"
+MODULE_VERSION="$(awk '/source *= *"clumio-code\/aws-template\/clumio"/ { getline; print }' "$SHARED" \
   | sed -nE 's/^ *version *= *"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p')"
-[ -n "$MODULE_VERSION" ] || fail "no exact module version found in $CONNECT/main.tf (expected version = \"x.y.z\" under the aws-template source)"
+[ -n "$MODULE_VERSION" ] || fail "no exact module version found in $SHARED (expected version = \"x.y.z\" under the aws-template source)"
 # A backend here would make the preview plan against real state and drop replacements silently.
 ! grep -q 'backend *"' "$CONNECT/versions.tf" || fail "$CONNECT/versions.tf has a backend block: move it to backend.tf"
 command -v terraform > /dev/null || fail "terraform not found"
 command -v python3 > /dev/null   || fail "python3 not found"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)" \
-  || fail "no AWS login (a read-only one is enough)"
+  || fail "not signed in to AWS (read-only is enough)"
 
 WORK="$(mktemp -d)"
 # The config never outlives the run; a pack that didn't finish is removed, never left half-written.
@@ -65,31 +70,31 @@ provider "clumio" {
   clumio_api_token    = "preview-only"
   clumio_api_base_url = "https://preview.invalid"
 }
-module "clumio" {
-  source                     = "clumio-code/aws-template/clumio"
-  version                    = "MODULE_VERSION"
-  clumio_token               = "PREVIEWCLUMIOTOKEN"
-  role_external_id           = "PREVIEWEXTERNALID"
-  clumio_aws_account_id      = "111111111111"
-  data_plane_account_id      = "222222222222"
-  aws_account_id             = var.account_id
-  aws_region                 = var.region
-  iam_entities_identifier    = var.iam_prefix
-  path                       = var.iam_path
-  is_s3_enabled              = contains(var.workloads, "s3")
-  is_rds_enabled             = contains(var.workloads, "rds")
-  is_ebs_enabled             = contains(var.workloads, "ebs")
-  clumio_iam_role_tags       = merge({ Vendor = "Clumio" }, var.role_tags)
-  permissions_boundary_arn   = var.permissions_boundary_arn
-  clumio_pass_role_deny_list = var.pass_role_deny_list
+# The same shared module step 1 calls, so what security approves is what step 1 creates.
+module "clumio_iam" {
+  source = "SHARED_DIR"
+  connection = {
+    token                 = "PREVIEWCLUMIOTOKEN"
+    role_external_id      = "PREVIEWEXTERNALID"
+    account_native_id     = var.account_id
+    aws_region            = var.region
+    clumio_aws_account_id = "111111111111"
+    data_plane_account_id = "222222222222"
+  }
+  iam_prefix               = var.iam_prefix
+  iam_path                 = var.iam_path
+  workloads                = var.workloads
+  role_tags                = var.role_tags
+  permissions_boundary_arn = var.permissions_boundary_arn
+  pass_role_deny_list      = var.pass_role_deny_list
 }
 EOF
 
-sed -i.bak "s/\"MODULE_VERSION\"/\"$MODULE_VERSION\"/" "$WORK/main.tf" && rm "$WORK/main.tf.bak"
+sed -i.bak "s#\"SHARED_DIR\"#\"$(cd "$(dirname "$SHARED")" && pwd)\"#" "$WORK/main.tf" && rm "$WORK/main.tf.bak"
 echo "Previewing Clumio's IAM with the settings in $(cd "$CONNECT" && pwd)/terraform.tfvars (module $MODULE_VERSION)..."
 ( cd "$WORK" && terraform init -input=false -no-color > init.log 2>&1 ) || { cat "$WORK/init.log"; fail "terraform init"; }
 ( cd "$WORK" && terraform plan -input=false -no-color -out=plan.bin > plan.log 2>&1 ) \
-  || { cat "$WORK/plan.log"; fail "terraform plan: see the error above (\"account ID not allowed\": log in to account_id)"; }
+  || { cat "$WORK/plan.log"; fail "terraform plan: see the error above (\"account ID not allowed\": sign in to account_id)"; }
 ( cd "$WORK" && terraform show -json plan.bin > plan.json )
 REGION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["variables"]["region"]["value"])' "$WORK/plan.json")"
 OUT="$(pwd)/clumio-iam-preview-$REGION-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -99,7 +104,7 @@ mkdir -p "$OUT/policies"
 python3 "$HERE/extract.py" "$WORK/plan.json" "$OUT" "$ACCOUNT" "$REGION" "$WORK"
 
 # --- Can the deploy role do all of it? Ask the IAM policy simulator. -----
-# It evaluates the identity's policies, permission boundaries and SCPs (not resource control
+# It evaluates the identity's policies, permissions boundaries and SCPs (not resource control
 # policies), with the request's Region, tags and boundary as context. It needs
 # iam:SimulatePrincipalPolicy. One named result: READY, BLOCKED, CANNOT CHECK.
 check_identity() {

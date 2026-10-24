@@ -1,8 +1,36 @@
 # Step 0: Preview the IAM
 
-Shows every IAM role, policy and permission `1-connect-clumio` would create, before anything is created, and checks that the deploy role may create them. Give the output to your security team.
+Part of [Get started with Clumio on AWS](../README.md). Set up your terminal as in [Before you begin](../README.md#before-you-begin) first.
 
-## Run it
+**What it does.** Shows every IAM role, policy and permission step 1 will create, and checks that your deploy role may create them. Nothing is created.
+
+**What you need.** First create step 1's settings: in `1-connect-clumio`, run `cp terraform.tfvars.example terraform.tfvars`, then edit it. Step 0 reads that file, and so does step 1, so what you preview is what you get.
+
+- `account_id` and `region`: the account and Region to connect.
+- `iam_prefix` and `iam_path`: your naming rule. If roles must start with `platform-`, set `iam_prefix = "platform-clumio"` and `iam_path = "/"`.
+- `workloads`: what Clumio may protect. Start with `["s3"]`; add `"rds"` for RDS and Aurora.
+- Only if your organization requires them: `role_tags`, `permissions_boundary_arn`, `pass_role_deny_list`. See SECURITY.md.
+
+**Before you run it.** In a sandbox where you're an administrator, step 0 is optional; step 1's plan shows the same resources. In a company account, don't skip it.
+
+**Run it.**
+
+```bash
+cd 0-iam-preview
+./preview.sh --as arn:aws:iam::<account>:role/<your deploy role>
+```
+
+Without `--as`, it checks your own login.
+
+**What you should see.** A summary, and a folder `clumio-iam-preview-<region>-<time>` for your security team. The last line is the answer:
+
+- **READY**: the deploy role can create everything. Go to step 1.
+- **BLOCKED**: lists each missing permission. Replace `<ACCOUNT_ID>` in the folder's `policies/deploy-role-policy.json`, grant it to the deploy role, and run step 0 again.
+- **CANNOT CHECK**: you're the root user, or can't run the check. Ask someone who can to run it with `--as`.
+
+**If something goes wrong.** *AWS account ID not allowed* means you're signed in to another account. For other errors, see [When something goes wrong](../docs/operate.md#when-something-goes-wrong).
+
+## Options
 
 ```bash
 ./preview.sh                                    # checks your own login
@@ -10,7 +38,7 @@ Shows every IAM role, policy and permission `1-connect-clumio` would create, bef
 ./preview.sh --connect /path/to/1-connect-clumio
 ```
 
-It reads step 1's own `terraform.tfvars`, variables, versions, lock file and module version, so the preview matches what step 1 creates. Change a setting there, and run it again. Log in to the `account_id` in that file.
+It reads step 1's own `terraform.tfvars` (copied from its `terraform.tfvars.example`), variables, versions, lock file and module version, so the preview matches what step 1 creates. Change a setting there, and run it again. Sign in to the `account_id` in that file.
 
 You need Terraform 1.5 or later, Python 3 and the AWS CLI. No Clumio token.
 
@@ -61,3 +89,5 @@ Some values only exist once you connect:
 `preview.sh` builds a temporary configuration from step 1's files, runs the plan and the check. `extract.py` turns the plan into `summary.md` and `policies/`, reading only the plan file. `test/test.sh` runs `extract.py` on two saved plans, one regulated and one with shipped defaults, and compares the output with known-good copies. Run it after any change here.
 
 What's been tested live is in [SECURITY.md](../SECURITY.md#what-is-proven-and-what-isnt).
+
+**Next:** [Step 1](../1-connect-clumio/README.md).

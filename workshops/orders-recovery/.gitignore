@@ -1,0 +1,7 @@
+# Your settings and Terraform's working files: never commit them.
+terraform.tfvars
+.terraform/
+*.tfstate
+*.tfstate.*
+# Made while the workshop runs.
+.lab/

@@ -3,7 +3,7 @@
 
     extract.py <plan.json> <out_dir> <account_id> <region> <work_dir>
 
-Writes <out_dir>/summary.md, <out_dir>/policies/*.json (incl. deploy-role-policy.json) and
+Writes <out_dir>/summary.md, <out_dir>/policies/*.json (including deploy-role-policy.json) and
 <work_dir>/deploy-check.tsv (what preview.sh asks the IAM simulator). Reads only the plan
 file: no AWS, no network. Called by preview.sh.
 """
@@ -35,10 +35,13 @@ def main():
 
     masks = {account: "<ACCOUNT_ID>", **PLACEHOLDERS}
     plan_json = json.loads(plan_text)
-    plan = Plan(plan_json, masks)
+    call = template_call(plan_json["configuration"]["root_module"])
+    if call is None:
+        sys.exit("FAIL: no clumio-code/aws-template module call in the plan: preview.sh and extract.py disagree")
+    plan = Plan(plan_json, call["module"], masks)
     # The settings and module version come from the plan itself (1-connect-clumio's tfvars).
     settings = {name: v["value"] for name, v in plan_json["variables"].items()}
-    version = plan_json["configuration"]["root_module"]["module_calls"]["clumio"]["version_constraint"]
+    version = call["version_constraint"]
 
     allow = deploy_requirements(plan, region, settings)
     write_json(f"{out}/policies/deploy-role-policy.json", deploy_role_policy(allow))
@@ -61,11 +64,10 @@ def main():
 class Plan:
     """The resources the plan would create, and how they point at each other."""
 
-    def __init__(self, plan, masks):
+    def __init__(self, plan, module, masks):
         self.masks = masks
         self.creates = [c for c in plan["resource_changes"] if c["change"]["actions"] == ["create"]]
         self.reads = {key(c["address"]): c for c in plan["resource_changes"] if c["change"]["actions"] == ["read"]}
-        module = plan["configuration"]["root_module"]["module_calls"]["clumio"]["module"]
         self.config = {r["address"]: r for r in module["resources"]}
         self.roles = {key(c["address"]): c for c in self.of_type("aws_iam_role")}
         policies = {key(c["address"]): c for c in self.of_type("aws_iam_policy")}
@@ -434,8 +436,20 @@ def after(change):
     return change["change"]["after"]
 
 
+def template_call(module):
+    """Clumio's aws-template call, wherever it sits: at the top (older plans, such as the test/*/plan.json fixtures) or inside the shared
+    module modules/clumio-account-iam."""
+    for call in module.get("module_calls", {}).values():
+        if call.get("source") == "clumio-code/aws-template/clumio":
+            return call
+        found = template_call(call.get("module", {}))
+        if found:
+            return found
+    return None
+
+
 def short(address):
-    return re.sub(r"^module\.clumio\.", "", address)
+    return re.sub(r"^(module\.[^.]+\.)+", "", address)  # the template has no modules of its own
 
 
 def strip_index(address):

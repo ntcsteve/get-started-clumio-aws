@@ -1,0 +1,16 @@
+account_id = "123456789012"   # your 12-digit TEST account ID; Terraform stops if you're signed in to another account
+region     = "ap-southeast-1" # must offer the RDS Data API for Aurora MySQL; most Regions do
+
+archive_retention_months = 1 # the workshop's archive, kept 1 month; Clumio charges an early-deletion fee under 12
+
+# Only if ./lab status says another Clumio policy protects orders-db: the rule ID it shows.
+# rds_rule_before_id = "<rule ID>"
+
+# Only if your organization requires them, on every AWS resource:
+# tags = { CostCenter = "1234" }
+
+# Only if your organization requires them for Clumio's IAM roles:
+# iam_prefix               = "platform-clumio"
+# iam_path                 = "/"
+# role_tags                = { team = "platform" }
+# permissions_boundary_arn = "arn:aws:iam::<account>:policy/<boundary>"

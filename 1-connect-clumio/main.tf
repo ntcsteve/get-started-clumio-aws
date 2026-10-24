@@ -6,7 +6,7 @@ provider "clumio" {}
 
 provider "aws" {
   region              = var.region
-  allowed_account_ids = [var.account_id] # Stops the run if you're logged in to any other account.
+  allowed_account_ids = [var.account_id] # Stops the run if you're signed in to any other account.
 }
 
 resource "clumio_aws_connection" "this" {
@@ -16,34 +16,69 @@ resource "clumio_aws_connection" "this" {
 
   lifecycle {
     # A destroy deletes Clumio's IAM, then the connection. If Clumio refuses the second part
-    # (error 367), backups stop. So no plan may delete it by accident; see README "Disconnect".
+    # (error 367), backups stop. So no plan may delete it by accident; see "Disconnect" in README.md here.
     prevent_destroy = true
   }
 }
 
-module "clumio" {
-  source  = "clumio-code/aws-template/clumio"
-  version = "0.41.0" # An exact version, so step 0 previews exactly what this creates.
+# Clumio's IAM, from the module the workshop uses too.
+module "clumio_iam" {
+  source     = "../modules/clumio-account-iam"
+  connection = clumio_aws_connection.this
 
-  clumio_token          = clumio_aws_connection.this.token
-  role_external_id      = clumio_aws_connection.this.role_external_id
-  aws_account_id        = clumio_aws_connection.this.account_native_id
-  aws_region            = clumio_aws_connection.this.aws_region
-  clumio_aws_account_id = clumio_aws_connection.this.clumio_aws_account_id
-  data_plane_account_id = clumio_aws_connection.this.data_plane_account_id # Limits S3 backup copies to Clumio's own account.
+  iam_prefix               = var.iam_prefix
+  iam_path                 = var.iam_path
+  workloads                = var.workloads
+  role_tags                = var.role_tags
+  permissions_boundary_arn = var.permissions_boundary_arn
+  pass_role_deny_list      = var.pass_role_deny_list
+}
 
-  iam_entities_identifier = var.iam_prefix
-  path                    = var.iam_path
-  is_s3_enabled           = contains(var.workloads, "s3")
-  is_rds_enabled          = contains(var.workloads, "rds") # RDS instances and Aurora clusters
-  is_ebs_enabled          = contains(var.workloads, "ebs") # EC2 instances and EBS volumes
+# Backups that fail quietly are found during an incident. This report says, by email, whether every
+# asset in this Region has a backup each day, kept at least 7 days. Optional, so upgrades plan no change.
+resource "clumio_report_configuration" "daily_backups" {
+  count       = length(var.report_emails) > 0 ? 1 : 0
+  name        = "backups-${var.account_id}-${var.region}"
+  description = "Every asset in ${var.region} has a backup each day, kept at least 7 days."
 
-  # Your organization's IAM rules, all optional. Clumio's own role tag is always kept.
-  clumio_iam_role_tags       = merge({ Vendor = "Clumio" }, var.role_tags)
-  permissions_boundary_arn   = var.permissions_boundary_arn
-  clumio_pass_role_deny_list = var.pass_role_deny_list
+  notification {
+    email_list = var.report_emails
+  }
+
+  parameter {
+    controls {
+      asset_backup {
+        look_back_period {
+          unit  = "days"
+          value = 1
+        }
+        window_size {
+          unit  = "days"
+          value = 1
+        }
+        minimum_retention_duration {
+          unit  = "days"
+          value = 7
+        }
+      }
+    }
+    filters {
+      asset {
+        groups {
+          type   = "aws"
+          region = var.region
+        }
+      }
+    }
+  }
+}
+
+# Moves state from before the shared module, so upgrades plan no changes.
+moved {
+  from = module.clumio
+  to   = module.clumio_iam.module.aws_template
 }
 
 output "next_step" {
-  value = "Connected ${clumio_aws_connection.this.account_native_id}/${clumio_aws_connection.this.aws_region} (${join(" + ", var.workloads)}). Next: terraform plan must say No changes; wait 5 minutes for Clumio to find your data; then step 2."
+  value = "Connected ${clumio_aws_connection.this.account_native_id}/${clumio_aws_connection.this.aws_region} (${join(" + ", var.workloads)}). Next: terraform plan must say No changes; when Clumio's inventory lists your data, go to step 2."
 }

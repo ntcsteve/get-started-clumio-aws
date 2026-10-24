@@ -89,13 +89,30 @@ The permissions reviewers ask about. Step 0 finds them in the policies and lists
 
 **Support:** open, read and update AWS Support cases; read Trusted Advisor. This role is always created; it can't be turned off.
 
+## Step 1b: your own key
+
+Optional. Clumio's `byok-template` module, pinned to version 0.5.7 in `1b-own-key/main.tf`, creates:
+
+- **The IAM role `ClumioKMSRole`** (or `<iam_prefix>-ClumioKMSRole`), at path `/`, with no permissions boundary and no tags: the module takes neither. Only Clumio's role `ClumioCustomerProtectRole` in Clumio's account can assume it, with an ExternalId kept in step 1b's state.
+- **Its inline policy `ReplicaAndGrantManagement`**, on your key only, in any Region: replicate it and tag it; describe it; create grants limited to encrypt, decrypt, re-encrypt, generate data keys, describe, create grants and retire grants; list and retire grants. It may also create keys, but only replica keys.
+- **Grants are not limited to Clumio.** The policy doesn't restrict who a grant is for, and a grant can allow further grants. So Clumio's role can let any principal, in any account, use your key for those operations. Grants also outlive changes to the role and its policy.
+- **The alias `alias/clumio-byok`** on your key.
+
+It doesn't change your key's policy. Clumio's access comes through the role's IAM policy, so the key policy must let IAM in your account grant access, as AWS's default key policy does.
+
+Clumio creates replicas of your key in the Regions where it keeps backups, and sets their key policies; they aren't copied from the primary. After the first backup, review the replicas and their grants (`aws kms list-grants`).
+
+To see Clumio use the key, look in CloudTrail for KMS calls on it by Clumio's users, such as `KMS-backup`, `KMS-restore` and `daebaksrv-S3Backup`. To cut Clumio off, disable the primary key and every replica: backups and restores that need them then stop. Deleting them makes the backups they encrypted unreadable for good.
+
 ## What is proven, and what isn't
 
-Tested live on a Clumio test tenant, September 2026.
+Tested live on a Clumio test tenant twice: in September 2026 at commit f257189, and on 2026-10-24 with this version, which calls the shared modules in `modules/`.
 
-**Proven:** connecting; protecting S3 (Backtrack, SecureVault Standard) and RDS and Aurora (PITR, SecureVault Standard, Archive); restoring; tearing down; IAM names matching step 0; `iam:TagRole` being required; READY and BLOCKED results; the IAM simulator allowing every action in the generated deploy policy, at the shipped defaults and with a prefix, boundary and tags; step 2 stopping without a connection; a backup rule picking up a newly created tagged database.
+**Proven:** connecting; protecting S3 (Backtrack, SecureVault Standard) and RDS and Aurora (PITR, SecureVault Standard, Archive); restoring; tearing down; IAM names matching step 0; `iam:TagRole` being required; READY and BLOCKED results; the IAM simulator allowing every action in the generated deploy policy, at the shipped defaults and with a prefix, boundary and tags; step 2 stopping without a connection; a protection rule picking up a newly created tagged database; upgrading steps 1, 2a and 2b from f257189, where the plan shows only moves, and says No changes after one apply; the shared modules connecting an account and protecting a database and a bucket by tag; placing a protection rule before an older, wider one in a shared tenant (`before_rule_id`); and the orders workshop end to end: a Backtrack roll back, a record restore to a CSV, an Aurora restore beside the original, and a full recovery after the database, the bucket and their AWS backups were deleted.
 
-**Not yet proven:** step 1 at the default path `/clumio/` (live runs used `/`); a full apply by a least-privilege deploy role, with tags, boundary and deny list; connecting EC2 and EBS (step 0 renders their IAM, but no live run created it).
+**Not yet proven:** RDS and Aurora protection by name; step 1 at the default path `/clumio/` (live runs used `/`); a full apply by a least-privilege deploy role, with tags, boundary and deny list; connecting EC2 and EBS (step 0 renders their IAM, but no live run created it); step 1b (BYOK), which has never been applied live: its key checks and permanence gate are tested offline, with mock providers; the optional compliance report (`report_emails`).
+
+**Tested offline, in `./check.sh`:** formatting and validation of every step; the shipped placeholders stopping each plan; step 0's output against known-good copies; the shared modules choosing data and refusing bad input, with mock providers; step 1b's key checks; and the workshop lab's core logic: the check's verdict, the safety gate, the scorecard, the record-restore CSV, and the account check before every deletion.
 
 ## What step 0's check can't see
 
@@ -112,6 +129,8 @@ READY comes from AWS's IAM policy simulator. It's strong evidence, but it can't 
 | Inline policies | 4, or 5 with a deny list | none | none | none |
 | SNS topic, with its policy | 1 | none | none | none |
 | EventBridge rules | 1 | +2 | +3 | +6 |
+
+With `report_emails` set, step 1 also creates a Clumio compliance report: a Clumio object, not an AWS one, so step 0 doesn't show it.
 
 ### The deploy role's policy
 

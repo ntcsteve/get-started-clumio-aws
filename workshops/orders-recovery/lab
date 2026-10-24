@@ -1,0 +1,1474 @@
+#!/usr/bin/env python3
+"""Run the orders-recovery workshop. Every command checks before it acts, and says what to do next.
+
+Read-only (nothing in AWS or Clumio changes):
+  ./lab preflight            is this account ready for the workshop?
+  ./lab status               Clumio's recovery points, and whether the incidents can start
+  ./lab check                HEALTHY or BROKEN: every order is there, unchanged, with its intact document
+  ./lab portal               one order at a time, at http://localhost:8080 (Ctrl-C stops it)
+  ./lab report               the scorecard (each incident's time to HEALTHY), and .lab/report.html
+
+Changes:
+  ./lab seed                 loads 1,000 orders and their documents (terraform apply runs it)
+  ./lab break deploy         a bad deployment: deletes 100 orders, overwrites 50 documents (once Clumio holds copies)
+  ./lab break everything     deletes the database, the bucket and every version (asks first)
+  ./lab prepare NAME         makes a restored cluster queryable (instance, RDS Data API)
+  ./lab repair --from NAME   copies only the missing orders back from a restored cluster
+  ./lab repair --from-csv F  copies only the missing orders back from a Clumio record-restore CSV
+  ./lab drop NAME            deletes a restored cluster you no longer need
+  ./lab rebuild              recreates the empty documents bucket for Clumio to restore into
+  ./lab down                 deletes everything the workshop made (asks first), then checks it is gone
+
+Settings: terraform.tfvars (account_id, region), CLUMIO_API_TOKEN and CLUMIO_API_BASE_URL in your
+shell. Names: names.json, shared with Terraform. Needs terraform, the AWS CLI v2 and python3.
+"""
+
+import argparse
+import collections
+import datetime
+import decimal
+import hashlib
+import html
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+EVIDENCE_DIR = os.path.join(HERE, ".lab")
+with open(os.path.join(HERE, "names.json")) as names_file:
+    NAMES = json.load(names_file)
+ORDER_IDS = range(1, 1001)
+CONTROL_ORDER = 1  # the bad deployment doesn't touch it, so a correct recovery leaves it as it was
+DELETED_BY_DEPLOY = [i for i in ORDER_IDS if i % 10 == 0]               # 100 orders
+OVERWRITTEN_BY_DEPLOY = [i for i in ORDER_IDS if i % 10 == 5 and i <= 500]  # 50 documents
+WAIT_SECONDS, WAIT_ROUNDS = 20, 60  # poll every 20 seconds, 60 times at most
+WAIT_LIMIT = f"{WAIT_SECONDS * WAIT_ROUNDS // 60} minutes"
+ROWS_PER_INSERT = 200  # well under the RDS Data API's request size limit
+CSV_SIZE_LIMIT_MB = 1  # a record restore of all 1,000 orders is about 0.2 MB
+EARLIEST_TIME, LATEST_TIME = datetime.datetime(2000, 1, 1), datetime.datetime(2101, 1, 1)  # sample data is from 2026
+ORDER_COLUMNS = ("id", "customer", "total", "status", "note", "placed_at", "document_key", "document_sha256")
+SCHEMA_FILE = os.path.join(EVIDENCE_DIR, "schema.json")  # saved by ./lab seed, compared by ./lab check
+INCIDENTS = {"break deploy": "Bad deployment", "break everything": "Everything deleted"}
+ACCOUNT, REGION = None, None  # from terraform.tfvars, set by load_settings()
+
+
+# How this file reads, top to bottom: the entry point, then one function per command in the order
+# the workshop uses them, then the parts those commands are built from, in the order they first need them.
+#   Entry point                   main(): the command line, and the function behind each command
+#   Commands                      preflight, seed, check, portal, status, break, repair, prepare, drop,
+#                                 rebuild, report, down
+#   Output, failure and evidence  say, stop, and the evidence log in .lab/
+#   Settings and names            terraform.tfvars and names.json
+#   Safety                        the signed-in account, and the account ID typed before deletions
+#   External calls                AWS CLI and Clumio API calls, and the one wait rule
+#   Sample data                   the 1,000 orders and documents, the same bytes every run
+#   Database                      the cluster, the RDS Data API, prepare and delete
+#   Documents bucket              upload, empty and delete
+#   Before an incident            Clumio's recovery points, and when an incident may start
+#   The check                     what ./lab check reads, and HEALTHY or BROKEN
+#   The portal                    one order at a time, in a browser
+#   Record restore                the CSV Clumio returns, checked before use
+#   The scorecard                 from each incident to HEALTHY
+
+# --- Entry point ---------------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(prog="./lab", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("preflight", "status", "check", "report", "seed", "rebuild"):
+        commands.add_parser(name)
+    confirm_help = "the account ID, instead of typing it (for agents); must match terraform.tfvars"
+    commands.add_parser("down").add_argument("--confirm-account", help=confirm_help)
+    commands.add_parser("portal").add_argument("--port", type=int, default=8080, help="the port on this computer")
+    break_parser = commands.add_parser("break")
+    break_parser.add_argument("incident", choices=["deploy", "everything"])
+    break_parser.add_argument("--confirm-account", help=confirm_help + " (break everything only)")
+    commands.add_parser("prepare").add_argument("cluster", help="the restored cluster")
+    repair_from = commands.add_parser("repair").add_mutually_exclusive_group(required=True)
+    repair_from.add_argument("--from", dest="source", help="the restored cluster")
+    repair_from.add_argument("--from-csv", dest="csv", help="the CSV from a Clumio record restore")
+    commands.add_parser("drop").add_argument("cluster", help="a restored cluster to delete")
+    args = parser.parse_args()
+    load_settings()
+    if args.command != "report":  # report reads only the local evidence log
+        confirm_signed_in_account()
+    {"preflight": cmd_preflight, "status": cmd_status, "check": cmd_check, "portal": cmd_portal, "report": cmd_report,
+     "seed": cmd_seed, "break": cmd_break, "prepare": cmd_prepare, "repair": cmd_repair,
+     "drop": cmd_drop, "rebuild": cmd_rebuild, "down": cmd_down}[args.command](args)
+
+
+# --- Commands, in the order the workshop uses them -----------------------------------------------
+
+def cmd_preflight(_args):
+    """Every environment assumption, checked before anything costs money."""
+    for tool in ("terraform", "aws"):
+        if not shutil.which(tool):
+            stop(f"{tool} not found. Install it (see docs/0-setup.md)")
+    if not run("aws", "--version").stdout.startswith("aws-cli/2."):
+        stop("the AWS CLI must be version 2. Update it (see docs/0-setup.md)")
+    say(f"AWS: signed in to {ACCOUNT}, Region {REGION}")  # main() confirmed the account
+
+    default = aws("rds", "describe-db-engine-versions", "--engine", "aurora-mysql", "--default-only")
+    version = default["DBEngineVersions"][0]["EngineVersion"] if default["DBEngineVersions"] else ""
+    minor = re.search(r"mysql_aurora\.3\.(\d+)", version)
+    if not minor or int(minor.group(1)) < 7:
+        stop(f"{REGION}'s default Aurora MySQL is {version or 'unknown'}; the RDS Data API needs 3.07 or later. Choose another Region")
+    say(f"Aurora MySQL default {version}: supports the RDS Data API")
+
+    status, _ = get_clumio("/policies/definitions?limit=1")
+    if status != 200:
+        stop(f"Clumio refused the token or API URL (HTTP {status}). Export a new token; check CLUMIO_API_BASE_URL")
+    say("Clumio: token and API URL accepted")
+    clumio_regions = {r.get("id") for r in clumio_items("/connections/aws/regions?limit=100")}
+    if REGION not in clumio_regions:
+        stop(f"Clumio can't connect AWS Region {REGION}. Choose a Region that Clumio supports")
+    say(f"Clumio: supports {REGION}")
+
+    deployed = run("terraform", "state", "list", expect_failure=True).stdout.strip() != ""
+    if not deployed:
+        if is_clumio_connected():
+            stop(f"{ACCOUNT} in {REGION} is already connected to Clumio. Use another test account or Region")
+        if bucket_exists():
+            stop(f"bucket {documents_bucket()} already exists. Delete it, or use another account")
+    say("READY" + ("" if deployed else ": run terraform init && terraform apply"))
+
+
+def cmd_seed(_args):
+    """Loads 1,000 orders and their documents. Safe to run again: existing orders stay as they are."""
+    incident = incident_since_deploy()
+    if incident:  # seed is for a fresh deployment: after an incident it would blur what was recovered, and the scorecard
+        stop(f"./lab seed is for a fresh deployment, and ./lab {incident} already ran in this one. "
+             "To start over: ./lab down, then terraform apply")
+    arn = prepare(NAMES["cluster"])
+    sql(arn, "CREATE TABLE IF NOT EXISTS orders (id INT PRIMARY KEY, customer VARCHAR(80) NOT NULL, "
+             "total DECIMAL(10,2) NOT NULL, status VARCHAR(20) NOT NULL, note TEXT NULL, placed_at DATETIME(3) NOT NULL, "
+             "document_key VARCHAR(80) NOT NULL, document_sha256 CHAR(64) NOT NULL, INDEX by_placed_at (placed_at)) "
+             "CHARACTER SET utf8mb4")
+    insert_orders(arn, [order_for(i) for i in ORDER_IDS])
+    os.makedirs(EVIDENCE_DIR, exist_ok=True)
+    with open(SCHEMA_FILE, "w") as file:  # every later ./lab check compares the schema with this copy
+        json.dump(read_schema(arn), file, indent=1)
+    upload_documents({i: document_for(i) for i in ORDER_IDS})
+    record("seed")
+    say("Seeded 1,000 orders and 1,000 documents. Next: ./lab check")
+
+
+def cmd_check(_args):
+    """The recovery acceptance test. Read-only. Exit 0 only when every order has its intact document."""
+    findings = {}
+    orders = read_database(findings)
+    documents = read_document_hashes(findings)
+    healthy = judge(orders, documents, findings)
+    for name, value in findings.items():
+        if name == "totals":  # compare these with the archive's, in Module 4
+            value = describe_totals(value)
+        print(f"  {name:20} {value}")
+    state = "HEALTHY" if healthy else "BROKEN"
+    record("check", state=state, findings=findings)
+    print(state)
+    sys.exit(0 if healthy else 1)
+
+
+def cmd_portal(args):
+    """Serves the portal on this computer until Ctrl-C. Read-only."""
+    secret_arn()  # stops now, with what to do, if the login secret is missing
+    server = open_portal_server(args.port)
+    say(f"portal: open http://localhost:{args.port} in a browser. Keep this terminal open; Ctrl-C stops it")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        say("portal stopped")
+    finally:
+        server.server_close()
+
+
+def cmd_status(_args):
+    """Clumio's latest recovery points of the database and the documents, and whether the
+    incidents can start. Backtrack's sync shows only in the Clumio console."""
+    database = database_in_clumio()
+    database_points = latest_database_recovery_points(database)
+    documents_point = latest_documents_recovery_point()
+    owner = protection_owner(database, our_rds_policy_id()) if database else ("none", None)
+    print(f"  database in Clumio       {'found' if database_points is not None else 'not found yet'}")
+    print(f"    protected by           " + {"ours": "the workshop's policy", "none": "no policy yet",
+                                            "another": f"another policy, through rule {owner[1]}"}[owner[0]])
+    for tier in ("SecureVault Standard", "SecureVault Archive"):
+        print(f"    {tier:22} {(database_points or {}).get(tier) or 'none yet'}")
+    print(f"  documents in Clumio      {'found' if documents_point is not None else 'not found yet'}")
+    print(f"    {'SecureVault Standard':22} {documents_point or 'none yet'}")
+    is_ready, reason = readiness(last_seed_time(), database_points, documents_point, is_archive_on())
+    if database and protection_reason(owner):
+        is_ready, reason = False, protection_reason(owner)  # the evidence must come from the workshop's policy
+    print(f"  ready for the incidents  {'yes' if is_ready else 'no'}: {reason}")
+
+
+def cmd_break(args):
+    if args.incident == "deploy":
+        break_deploy()
+    else:
+        break_everything(args.confirm_account)
+
+
+def break_deploy():
+    """A bad deployment: deletes every tenth order, and overwrites 50 documents."""
+    move, started_at = gate_incident("break deploy")
+    arn = queryable_arn(NAMES["cluster"]) or stop("the database isn't queryable. Run ./lab check first")
+    open_incident("break deploy", move, started_at)
+    sql(arn, f"DELETE FROM orders WHERE id IN ({', '.join(str(i) for i in DELETED_BY_DEPLOY)})")  # ids are ints we made
+    upload_documents({i: document_for(i).replace("delivery note", "delivery note (overwritten by deploy)")
+                      for i in OVERWRITTEN_BY_DEPLOY})
+    say(f"Bad deployment at {now():%Y-%m-%d %H:%M:%S} UTC: {len(DELETED_BY_DEPLOY)} orders deleted, "
+        f"{len(OVERWRITTEN_BY_DEPLOY)} documents overwritten. Next: ./lab check")
+
+
+def break_everything(confirmed=None):
+    """The widest blast radius: the database with its automated backups, the bucket with every version."""
+    move, started_at = gate_incident("break everything")
+    confirm_by_account_id([f"database {NAMES['cluster']} and its automated backups", f"bucket {documents_bucket()} and every version"],
+                          confirmed)
+    open_incident("break everything", move, started_at)
+    delete_cluster(NAMES["cluster"])
+    empty_and_delete_bucket()
+    say("Everything is gone from the account. Next: ./lab check, then recover with Clumio (docs/5-survive.md)")
+
+
+def cmd_repair(args):
+    """Copies only the missing orders back into the live database, from a restored cluster (4B) or
+    from Clumio's record-restore CSV (4A). Orders that are there stay as they are."""
+    if args.source == NAMES["cluster"]:
+        stop("--from must be the restored cluster, not the live one")
+    live = queryable_arn(NAMES["cluster"]) or stop(f"{NAMES['cluster']} isn't queryable. Run ./lab check")
+    present = {int(r["id"]) for r in sql(live, "SELECT id FROM orders")}
+    missing = [i for i in ORDER_IDS if i not in present]
+    if not missing:
+        say("No orders are missing. Nothing to copy")
+        return
+    if args.csv:
+        source_name = os.path.basename(args.csv)
+        rows = [order for order in read_orders_csv(args.csv) if int(order["id"]) in missing]
+    else:
+        source_name = args.source
+        source = queryable_arn(args.source) or stop(f"{args.source} isn't queryable yet. Run ./lab prepare {args.source}")
+        rows = sql(source, f"SELECT * FROM orders WHERE id IN ({', '.join(str(i) for i in missing)})")  # ids are ints we made
+    insert_orders(live, rows)
+    record("repair", source=source_name, copied=len(rows))
+    say(f"Copied {len(rows)} of {len(missing)} missing orders from {source_name}. Next: ./lab check")
+
+
+def cmd_prepare(args):
+    prepare(args.cluster)
+    say(f"{args.cluster} answers SQL")
+
+
+def cmd_drop(args):
+    # No account ID asked, unlike break everything and down: a dropped copy can be restored again from
+    # Clumio's recovery point, and only workshop restores can be dropped, never the live database.
+    if args.cluster == NAMES["cluster"]:
+        stop("that's the live database. ./lab drop only deletes restored clusters")
+    if args.cluster not in restored_clusters():
+        stop(f"{args.cluster} isn't a workshop restore (named {NAMES['cluster']}-... or in subnet group "
+             f"{NAMES['subnet_group']}). ./lab drop deletes nothing else")
+    delete_cluster(args.cluster)
+    say(f"{args.cluster} deleted")
+
+
+def cmd_rebuild(_args):
+    """Recreates the empty documents bucket, configured as Terraform built it, for Clumio's S3 restore.
+    Terraform isn't run here: after a restore it could replace the restored database."""
+    if bucket_exists():
+        stop(f"{documents_bucket()} already exists. Nothing to rebuild")
+    location = [] if REGION == "us-east-1" else ["--create-bucket-configuration", f"LocationConstraint={REGION}"]
+    aws("s3api", "create-bucket", "--bucket", documents_bucket(), *location)
+    aws("s3api", "put-bucket-versioning", "--bucket", documents_bucket(), "--versioning-configuration", "Status=Enabled")
+    aws("s3api", "put-public-access-block", "--bucket", documents_bucket(), "--public-access-block-configuration",
+        "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true")
+    tags = {**workshop_tags(), NAMES["protection_tag"]["key"]: NAMES["protection_tag"]["value"]}
+    aws("s3api", "put-bucket-tagging", "--bucket", documents_bucket(), "--tagging",
+        json.dumps({"TagSet": [{"Key": k, "Value": v} for k, v in tags.items()]}))
+    record("rebuild")
+    say(f"{documents_bucket()} recreated, empty and tagged for Clumio. Next: wait until Clumio lists it, then restore into it")
+
+
+def cmd_report(_args):
+    """The scorecard, and .lab/report.html, from the evidence log. Reads nothing from AWS or Clumio."""
+    events = read_events()
+    scorecard = incident_scorecard(events)
+    print(f"  {'incident':20} {'back to HEALTHY after':23} damage found")
+    for incident, damage, took in scorecard or [("none yet", "", "")]:
+        print(f"  {incident:20} {took:23} {damage}")
+
+    report = os.path.join(EVIDENCE_DIR, "report.html")
+    os.makedirs(EVIDENCE_DIR, exist_ok=True)
+    with open(report, "w") as file:
+        file.write(report_html(events, ACCOUNT, REGION))
+    say(f"Report: {report}")
+
+
+def report_html(events, account, region):
+    """The report as a web page, made to be shared: the account shows only its last four digits, and
+    every value from the log is escaped. Pure."""
+    masked = "XXXXXXXX" + account[-4:]
+
+    def shareable(value):  # AWS's own error text can name an ARN, and every ARN holds the account ID
+        return html.escape(str(value).replace(account, masked))
+
+    def readable(at):
+        return f"{parse_time(at):%Y-%m-%d %H:%M}"  # the column header says UTC
+
+    def cells(event):
+        details = {**event.get("findings", {}), **{k: v for k, v in event.items() if k in ("source", "copied")}}
+        if isinstance(details.get("totals"), dict):
+            details["totals"] = describe_totals(details["totals"])
+        values = [readable(event["at"]), event["event"], event.get("state", ""), ", ".join(f"{k}: {v}" for k, v in details.items())]
+        return "".join(f"<td>{shareable(value)}</td>" for value in values)  # the log is text, the report a web page
+    rows = "".join(f"<tr>{cells(e)}</tr>" for e in events)
+    score_rows = "".join("<tr>" + "".join(f"<td>{shareable(v)}</td>" for v in row) + "</tr>"
+                         for row in incident_scorecard(events))
+    return f"""<!doctype html><meta charset="utf-8"><title>Orders recovery report</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem}}td,th{{padding:.4rem .8rem;border-bottom:1px solid #ddd;text-align:left}}</style>
+<h1>Orders recovery report</h1>
+<p>Account ending {account[-4:]}, Region {region}. Clumio's own record of each recovery: Clumio console, Activity, Tasks.</p>
+<h2>Scorecard</h2>
+<p>From each incident to the first ./lab check that said HEALTHY again.</p>
+<table><tr><th>Incident</th><th>Damage found</th><th>Back to HEALTHY after</th></tr>{score_rows}</table>
+<h2>Every recorded event</h2>
+<table><tr><th>Time (UTC)</th><th>Event</th><th>Result</th><th>Details</th></tr>{rows}</table>"""
+
+
+def cmd_down(args):
+    """Asks once, then deletes what Terraform doesn't know (restores, added instances), then the rest."""
+    restored = restored_clusters()
+    main = describe_cluster(NAMES["cluster"])
+    added = [m["DBInstanceIdentifier"] for m in (main["DBClusterMembers"] if main else [])
+             if m["DBInstanceIdentifier"] != NAMES["instance"]]
+    confirm_by_account_id([f"restored cluster {c}" for c in restored]
+                          + [f"instance {i} in {NAMES['cluster']}, added after Terraform built it" for i in added]
+                          + ["everything Terraform built: the database, the documents bucket and every version, "
+                             "the network, the login secret, and the Clumio connection and policies"],
+                          args.confirm_account)
+    for cluster in restored:
+        delete_cluster(cluster)
+    delete_cluster(NAMES["cluster"], keep_instance=NAMES["instance"])
+    say("running terraform destroy")
+    # Already confirmed above: a second yes/no here could stop halfway, after the deletes.
+    if subprocess.run(["terraform", "destroy", "-auto-approve", "-input=false"], cwd=HERE).returncode != 0:
+        stop("terraform destroy didn't finish. Fix the error above, then run ./lab down again")
+    left = [f"cluster {c}" for c in restored_clusters()]
+    if describe_cluster(NAMES["cluster"]):
+        left.append(f"cluster {NAMES['cluster']}")
+    if bucket_exists():
+        left.append(f"bucket {documents_bucket()}")
+    if describe_secret():
+        left.append(f"secret {NAMES['login_secret']}")
+    if is_clumio_connected():
+        left.append("Clumio connection")
+    for prefix in ("clumio_rds_policy_prefix", "clumio_s3_policy_prefix"):
+        name = f"{NAMES[prefix]}{ACCOUNT}"
+        if clumio_items("/policies/definitions?filter=" + clumio_filter({"name": {"$eq": name}})):
+            left.append(f"Clumio policy {name}")
+    if left:
+        stop(f"still there: {', '.join(left)}. Run ./lab down again")
+    record("down")  # a new deployment starts a new evidence log section
+    say("DONE: the workshop is gone. Clumio keeps recovery points it already took until their retention ends")
+
+
+# --- Output, failure and evidence ----------------------------------------------------------------
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def say(message):
+    print(f"[{now():%H:%M:%S} UTC] {message}", flush=True)  # UTC, like ./lab status and the report
+
+
+def stop(message):
+    print(f"STOP: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def record(event, **details):
+    """Appends one timestamped event to the evidence log that ./lab report reads."""
+    os.makedirs(EVIDENCE_DIR, exist_ok=True)
+    with open(os.path.join(EVIDENCE_DIR, "events.jsonl"), "a") as log:
+        log.write(json.dumps({"at": now().isoformat(timespec="seconds"), "event": event, **details}) + "\n")
+
+
+# --- Settings and names --------------------------------------------------------------------------
+
+def read_tfvars():
+    path = os.path.join(HERE, "terraform.tfvars")
+    if not os.path.exists(path):
+        stop("no terraform.tfvars. Run: cp terraform.tfvars.example terraform.tfvars, then set account_id and region")
+    return open(path).read()
+
+
+def read_setting(key):
+    match = re.search(rf'^\s*{key}\s*=\s*"([^"]*)"', read_tfvars(), re.M)
+    return match.group(1) if match else ""
+
+
+def is_archive_on():
+    """Whether terraform.tfvars keeps archive copies (archive_retention_months above 0)."""
+    match = re.search(r"^\s*archive_retention_months\s*=\s*([0-9]+)", read_tfvars(), re.M)
+    return bool(match and int(match.group(1)) > 0)
+
+
+def load_settings():
+    global ACCOUNT, REGION
+    ACCOUNT, REGION = read_setting("account_id"), read_setting("region")
+    if not re.fullmatch(r"\d{12}", ACCOUNT):
+        stop("set account_id in terraform.tfvars to your 12-digit test account ID")
+    if not re.fullmatch(r"[a-z]{2}-[a-z]+-\d", REGION):  # commercial Regions only
+        stop("set region in terraform.tfvars, such as ap-southeast-1")
+
+
+def workshop_tags():
+    """The tags Terraform put on every resource (its tags output), for what ./lab creates itself."""
+    return json.loads(run("terraform", "output", "-json", "tags").stdout)
+
+
+def documents_bucket():
+    return f"{NAMES['bucket_prefix']}{ACCOUNT}"
+
+
+def document_key(order_id):
+    return f"{NAMES['documents_prefix']}order-{order_id}.json"
+
+
+# --- Safety: the account, and a pause before anything nobody can undo ----------------------------
+
+def confirm_signed_in_account():
+    """Every AWS command runs only in the account terraform.tfvars names. A terminal signed in to
+    another account stops here, before it reads or changes anything."""
+    identity = run("aws", "sts", "get-caller-identity", "--output", "json", expect_failure=True)
+    if identity.returncode != 0:
+        stop(f"not signed in to AWS ({identity.stderr.strip()[:200]}). Sign in (for example: aws sso login), then run this again")
+    signed_in = json.loads(identity.stdout)["Account"]
+    if signed_in != ACCOUNT:
+        stop(f"signed in to AWS account {signed_in}, but terraform.tfvars says {ACCOUNT}. Nothing was changed")
+
+
+def confirm_by_account_id(what_goes, confirmed=None):
+    """The one pause before a deletion nobody can undo: lists what goes, then needs the account ID,
+    typed by a person or passed by an agent as --confirm-account. Either must match terraform.tfvars."""
+    print(f"This deletes, in account {ACCOUNT}:")
+    for item in what_goes:
+        print(f"  {item}")
+    print("You can't undo it.")
+    if confirmed is None:
+        try:
+            confirmed = input(f"Type the account ID ({ACCOUNT}) to continue: ").strip()
+        except EOFError:
+            confirmed = ""
+    if confirmed != ACCOUNT:
+        stop("the account ID didn't match. Nothing was deleted")
+
+
+# --- External calls: loud by default. "Absent" is only ever AWS's own not-found answer -----------
+
+def run(*command, expect_failure=False):
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, cwd=HERE)
+    except FileNotFoundError:
+        stop(f"{command[0]} not found. Install it (see docs/0-setup.md)")
+    if result.returncode != 0 and not expect_failure:
+        stop(f"{' '.join(command[:3])} failed: {result.stderr.strip()[:500]}")
+    return result
+
+
+def aws_answer(*args, absent_if=()):
+    """One AWS CLI call in the workshop's Region: (parsed JSON, None), or (None, AWS's message) when AWS
+    answers with an error code in absent_if. The RDS Data API answers "starting" for a while after it's
+    turned on, and now and then later (seen live): unless the caller asks for that answer in absent_if,
+    it's waited through here, within WAIT_LIMIT. A call refused that way did nothing, so sending it
+    again is safe. Any other failure (an expired sign-in, AccessDenied, throttling) stops."""
+    for round_number in range(WAIT_ROUNDS):
+        result = run("aws", *args, "--region", REGION, "--output", "json", expect_failure=True)
+        if result.returncode == 0:
+            return (json.loads(result.stdout) if result.stdout.strip() else {}), None
+        message = result.stderr.strip().splitlines()[0][:300] if result.stderr.strip() else "no answer"
+        code = re.search(r"An error occurred \(([^)]+)\)", result.stderr)
+        code = code.group(1) if code else None
+        if code in absent_if:
+            return None, message
+        if args[0] != "rds-data" or code not in DATA_API_STARTING:
+            stop(f"aws {' '.join(args[:2])} failed: {result.stderr.strip()[:500]}")
+        if round_number == 0:
+            say(f"the RDS Data API is still starting ({code}); waiting up to {WAIT_LIMIT} for this call")
+        time.sleep(WAIT_SECONDS)
+    stop(f"the RDS Data API still isn't ready after {WAIT_LIMIT}. AWS's last answer: {message}. Run this again later")
+
+
+def aws(*args, absent_if=()):
+    """aws_answer without the message: parsed JSON, or None for an expected absence."""
+    return aws_answer(*args, absent_if=absent_if)[0]
+
+
+def get_clumio(path):
+    """GET from the Clumio API. Returns (HTTP status, body). The token goes in a header, never a URL."""
+    token, base = os.environ.get("CLUMIO_API_TOKEN"), os.environ.get("CLUMIO_API_BASE_URL")
+    if not token or not base:
+        stop("export CLUMIO_API_TOKEN and CLUMIO_API_BASE_URL first (see docs/0-setup.md)")
+    request = urllib.request.Request(base.rstrip("/") + path,
+                                     headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.status, json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as error:
+        return error.code, {}
+    except urllib.error.URLError as error:
+        stop(f"can't reach Clumio at {base}: {error.reason}")
+
+
+def clumio_items(path):
+    """A Clumio list call that must succeed. Anything but HTTP 200 stops, so 'none' is never a guess."""
+    status, body = get_clumio(path)
+    if status != 200:
+        stop(f"Clumio answered HTTP {status} for {path.split('?')[0]}. Check the token (it may have expired)")
+    return body.get("_embedded", {}).get("items", [])
+
+
+def clumio_filter(condition):
+    return urllib.parse.quote(json.dumps(condition))
+
+
+def is_clumio_connected():
+    """Whether this account and Region are connected to Clumio. Only 200 or 404 is an answer."""
+    status, _ = get_clumio(f"/connections/aws/{ACCOUNT}_{REGION}")
+    if status not in (200, 404):
+        stop(f"Clumio answered HTTP {status} for the connection. Check the token (it may have expired)")
+    return status == 200
+
+
+# --- Sample data: deterministic, so every run and every check expects the same bytes -------------
+
+# Real-world text that breaks careless exports: scripts beyond ASCII, quotes, commas, newlines.
+CUSTOMERS = ("Tan Wei Ming 陈伟明", "Nur Aisyah binti Rahman", "Priya Rajendran பிரியா",
+             "Seán O'Brien, Jr.", "Lim Mei Ling 林美玲", "Muhammad Hafiz bin Ismail")
+
+
+def document_for(order_id):
+    return json.dumps({
+        "document": "delivery note",
+        "order": order_id,
+        "customer": f"Customer {order_id:04d}",
+        "reference": f"DN-{order_id:05d}",
+        "items": [{"sku": f"SKU-{(order_id * 7) % 97:03d}", "quantity": 1 + order_id % 5}],
+    }, sort_keys=True)
+
+
+def sha256(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def note_for(order_id):
+    """A delivery note that tests an export: NULL, empty, quotes with a newline, edge spaces, or plain."""
+    return {0: None, 1: "", 2: 'Leave at the door, "side gate"\nCall on arrival',
+            3: "  spaces at both ends  "}.get(order_id % 7, f"Order {order_id}")
+
+
+def order_for(order_id):
+    placed_at = datetime.datetime(2026, 1, 1) + datetime.timedelta(minutes=order_id * 7, milliseconds=order_id)
+    return {"id": order_id, "customer": f"{CUSTOMERS[order_id % len(CUSTOMERS)]} #{order_id:04d}",
+            "total": f"{(order_id * 37) % 5000}.50", "status": "delivered", "note": note_for(order_id),
+            "placed_at": placed_at.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+            "document_key": document_key(order_id), "document_sha256": sha256(document_for(order_id))}
+
+
+# --- Database ------------------------------------------------------------------------------------
+
+# The RDS Data API's answers for a cluster that can't take SQL yet: starting, without an instance,
+# or without the Data API. Anything else (AccessDenied, a bad secret) is a real error and stops.
+DATA_API_STARTING = ("DatabaseResumingException", "DatabaseUnavailableException", "HttpEndpointNotEnabledException",
+                     "ServiceUnavailableError")  # answers that pass on their own, as the Data API starts
+NOT_SERVING = ("BadRequestException", "DatabaseNotFoundException", "InvalidResourceStateException",
+               "StatementTimeoutException")  # answers that don't pass on their own: the cluster can't take SQL
+NOT_QUERYABLE = DATA_API_STARTING + NOT_SERVING
+
+
+def describe_cluster(cluster_id):
+    response = aws("rds", "describe-db-clusters", "--db-cluster-identifier", cluster_id, absent_if=("DBClusterNotFoundFault",))
+    return response["DBClusters"][0] if response else None
+
+
+def instance_status(instance_id):
+    response = aws("rds", "describe-db-instances", "--db-instance-identifier", instance_id, absent_if=("DBInstanceNotFound",))
+    return response["DBInstances"][0]["DBInstanceStatus"] if response else None
+
+
+def describe_secret():
+    """The login secret's ARN, or None when it doesn't exist."""
+    response = aws("secretsmanager", "describe-secret", "--secret-id", NAMES["login_secret"],
+                   absent_if=("ResourceNotFoundException",))
+    return response["ARN"] if response else None
+
+
+_secret_arn = None
+
+
+def secret_arn():
+    global _secret_arn
+    if _secret_arn is None:
+        _secret_arn = describe_secret() or stop(f"login secret {NAMES['login_secret']} is missing. Run ./lab check")
+    return _secret_arn
+
+
+def sql_args(cluster_arn, statement, parameters=()):
+    """The AWS CLI arguments for one parameterized SQL statement through the RDS Data API."""
+    return ["rds-data", "execute-statement", "--resource-arn", cluster_arn, "--secret-arn", secret_arn(),
+            "--database", NAMES["database"], "--sql", statement,
+            "--parameters", json.dumps(list(parameters)), "--format-records-as", "JSON"]
+
+
+def sql(cluster_arn, statement, parameters=(), absent_if=()):
+    """One parameterized SQL statement through the RDS Data API. Returns rows as dicts."""
+    response = aws(*sql_args(cluster_arn, statement, parameters), absent_if=absent_if)
+    if response is None:
+        return None
+    return json.loads(response.get("formattedRecords") or "[]")
+
+
+def insert_parameters(order):
+    """One order as RDS Data API parameters: a None note goes in as SQL NULL, not as text. Pure."""
+    return [
+        {"name": "id", "value": {"longValue": int(order["id"])}},
+        {"name": "customer", "value": {"stringValue": order["customer"]}},
+        {"name": "total", "value": {"stringValue": str(order["total"])}, "typeHint": "DECIMAL"},
+        {"name": "status", "value": {"stringValue": order["status"]}},
+        {"name": "note", "value": {"isNull": True} if order["note"] is None else {"stringValue": order["note"]}},
+        {"name": "placed_at", "value": {"stringValue": order["placed_at"]}, "typeHint": "TIMESTAMP"},
+        {"name": "document_key", "value": {"stringValue": order["document_key"]}},
+        {"name": "document_sha256", "value": {"stringValue": order["document_sha256"]}},
+    ]
+
+
+# IGNORE keeps rows that already exist, so a batch that's sent again never writes a row twice.
+INSERT_ORDER_SQL = ("INSERT IGNORE INTO orders (id, customer, total, status, note, placed_at, document_key, document_sha256) "
+                    "VALUES (:id, :customer, :total, :status, :note, :placed_at, :document_key, :document_sha256)")
+
+
+def insert_orders(cluster_arn, orders):
+    """Inserts orders with parameters, in batches. Rows that already exist stay as they are."""
+    for start in range(0, len(orders), ROWS_PER_INSERT):
+        parameter_sets = [insert_parameters(o) for o in orders[start:start + ROWS_PER_INSERT]]
+        aws("rds-data", "batch-execute-statement", "--resource-arn", cluster_arn, "--secret-arn", secret_arn(),
+            "--database", NAMES["database"], "--sql", INSERT_ORDER_SQL, "--parameter-sets", json.dumps(parameter_sets))
+
+
+def query_readiness(cluster_id):
+    """(the cluster's ARN, None) if it answers SQL right now, else (None, why not). Read-only."""
+    cluster = describe_cluster(cluster_id)
+    if cluster is None:
+        return None, "the cluster doesn't exist"
+    if not cluster.get("HttpEndpointEnabled"):
+        return None, "its RDS Data API is off"
+    if not cluster["DBClusterMembers"]:
+        return None, "it has no instance"
+    response, message = aws_answer(*sql_args(cluster["DBClusterArn"], "SELECT 1"), absent_if=NOT_QUERYABLE)
+    return (cluster["DBClusterArn"], None) if response is not None else (None, message)
+
+
+def queryable_arn(cluster_id):
+    """The cluster's ARN if it answers SQL right now, else None. Read-only."""
+    return query_readiness(cluster_id)[0]
+
+
+def prepare(cluster_id):
+    """Makes a cluster queryable: adds an instance and turns on the Data API if needed, then waits."""
+    cluster = describe_cluster(cluster_id)
+    if cluster is None:
+        stop(f"cluster {cluster_id} not found. Check the name, and that the restore has finished")
+    if not cluster["DBClusterMembers"]:
+        # The main cluster gets the instance name Terraform uses, so ./lab down knows to keep it.
+        instance = NAMES["instance"] if cluster_id == NAMES["cluster"] else f"{cluster_id}-1"
+        say(f"adding instance {instance} (restores can arrive without one)")
+        aws("rds", "create-db-instance", "--db-instance-identifier", instance,
+            "--db-cluster-identifier", cluster_id, "--engine", "aurora-mysql", "--db-instance-class", "db.r6g.large",  # as app/main.tf
+            "--tags", json.dumps([{"Key": k, "Value": v} for k, v in workshop_tags().items()]))
+    if not cluster.get("HttpEndpointEnabled"):
+        say(f"turning on the RDS Data API for {cluster_id} (restores can arrive without it)")
+        aws("rds", "enable-http-endpoint", "--resource-arn", cluster["DBClusterArn"])
+    say(f"waiting until {cluster_id} answers SQL")
+    for _ in range(WAIT_ROUNDS):
+        arn, why_not = query_readiness(cluster_id)
+        if arn:
+            return arn
+        time.sleep(WAIT_SECONDS)
+    stop(f"{cluster_id} doesn't answer SQL after {WAIT_LIMIT}. AWS's last answer: {why_not}. "
+         "Check it is Available, then run this again")
+
+
+def delete_cluster(cluster_id, keep_instance=None):
+    """Deletes a cluster's instances except keep_instance, then the cluster when nothing is kept.
+    Safe to run again after an interruption: what is already being deleted is only waited for."""
+    cluster = describe_cluster(cluster_id)
+    if cluster is None:
+        return
+    members = [m["DBInstanceIdentifier"] for m in cluster["DBClusterMembers"] if m["DBInstanceIdentifier"] != keep_instance]
+    for instance in members:
+        if instance_status(instance) not in (None, "deleting"):
+            say(f"deleting instance {instance}")
+            aws("rds", "delete-db-instance", "--db-instance-identifier", instance)
+    for instance in members:
+        run("aws", "rds", "wait", "db-instance-deleted", "--db-instance-identifier", instance, "--region", REGION)
+    if keep_instance:
+        return
+    if cluster["Status"] != "deleting":
+        say(f"deleting cluster {cluster_id} and its automated backups")
+        aws("rds", "delete-db-cluster", "--db-cluster-identifier", cluster_id, "--skip-final-snapshot",
+            "--delete-automated-backups")
+    for _ in range(WAIT_ROUNDS):
+        if describe_cluster(cluster_id) is None:
+            return
+        time.sleep(WAIT_SECONDS)
+    stop(f"{cluster_id} is still being deleted after {WAIT_LIMIT}. Run this again later")
+
+
+def restored_clusters():
+    """The clusters Clumio restored for the workshop: every cluster other than the main one that is in
+    the workshop's subnet group or named after the main one (orders-db-...). The docs ask for both."""
+    main = NAMES["cluster"]
+    return [c["DBClusterIdentifier"] for c in aws("rds", "describe-db-clusters")["DBClusters"]
+            if c["DBClusterIdentifier"] != main
+            and (c.get("DBSubnetGroup") == NAMES["subnet_group"] or c["DBClusterIdentifier"].startswith(main + "-"))]
+
+
+# --- Documents bucket ----------------------------------------------------------------------------
+
+def bucket_exists():
+    return aws("s3api", "head-bucket", "--bucket", documents_bucket(), absent_if=("404", "NoSuchBucket")) is not None
+
+
+def upload_documents(texts_by_order):
+    with tempfile.TemporaryDirectory() as folder:
+        for order_id, text in texts_by_order.items():
+            with open(os.path.join(folder, f"order-{order_id}.json"), "w") as file:
+                file.write(text)
+        run("aws", "s3", "cp", folder, f"s3://{documents_bucket()}/{NAMES['documents_prefix']}", "--recursive",
+            "--only-show-errors", "--region", REGION)
+
+
+def empty_and_delete_bucket():
+    if not bucket_exists():
+        return
+    say(f"deleting every object version in {documents_bucket()}")
+    for _ in range(100):  # 1,000 keys per pass; this workshop needs a few passes at most
+        page = aws("s3api", "list-object-versions", "--bucket", documents_bucket(), "--max-keys", "1000", "--no-paginate")
+        keys = [{"Key": v["Key"], "VersionId": v["VersionId"]}
+                for v in (page.get("Versions") or []) + (page.get("DeleteMarkers") or [])][:1000]
+        if not keys:
+            aws("s3api", "delete-bucket", "--bucket", documents_bucket())
+            return
+        result = aws("s3api", "delete-objects", "--bucket", documents_bucket(), "--delete", json.dumps({"Objects": keys, "Quiet": True}))
+        if result.get("Errors"):
+            stop(f"S3 refused to delete {len(result['Errors'])} versions; first: {result['Errors'][0]}")
+    stop(f"{documents_bucket()} still has versions after 100 passes. Run this again")
+
+
+# --- Before an incident: Clumio must hold a copy to recover from ---------------------------------
+
+def parse_time(text):
+    """An RFC 3339 time from Clumio or the evidence log, as an aware datetime (Python 3.9 safe)."""
+    return datetime.datetime.fromisoformat(re.sub(r"\.\d+", "", text).replace("Z", "+00:00"))
+
+
+def database_in_clumio():
+    """orders-db as Clumio lists it, or None if Clumio hasn't found it yet."""
+    resources = clumio_items("/datasources/aws/rds-resources?limit=100&filter=" + clumio_filter(
+        {"account_native_id": {"$eq": ACCOUNT}, "name": {"$contains": NAMES["cluster"]}}))
+    return next((r for r in resources if r.get("name") == NAMES["cluster"] and not r.get("is_deleted")), None)
+
+
+def our_rds_policy_id():
+    """The ID of the workshop's own RDS policy, or None before Terraform creates it."""
+    name = f"{NAMES['clumio_rds_policy_prefix']}{ACCOUNT}"
+    policies = clumio_items("/policies/definitions?filter=" + clumio_filter({"name": {"$eq": name}}))
+    return policies[0]["id"] if policies else None
+
+
+def protection_owner(database, our_policy_id):
+    """Who protects orders-db: ("ours", None), ("none", None), or ("another", the rule that matched
+    it). Clumio applies the first rule that matches, so an older, wider rule can win. Pure."""
+    info = database.get("protection_info") or {}
+    if not info.get("policy_id"):
+        return "none", None
+    if info["policy_id"] == our_policy_id:
+        return "ours", None
+    return "another", info.get("rule_id")
+
+
+def protection_reason(owner):
+    """Why the incidents can't start yet, for an owner that isn't ours; None when it is. Pure."""
+    who, rule_id = owner
+    if who == "ours":
+        return None
+    if who == "none":
+        return f"Clumio hasn't applied a policy to {NAMES['cluster']} yet: wait, then run ./lab status again"
+    return (f"{NAMES['cluster']} is protected by another Clumio policy, through rule {rule_id}: an older rule matched it "
+            f'first. Set rds_rule_before_id = "{rule_id}" in terraform.tfvars, then run terraform apply. Or ask your '
+            "Clumio administrator to narrow that rule")
+
+
+def latest_database_recovery_points(database):
+    """orders-db's latest recovery point start time in each SecureVault tier, or None if Clumio
+    hasn't found the database yet."""
+    if database is None:
+        return None
+    tiers = {"aws_rds_resource_rolling_backup": "SecureVault Standard", "aws_rds_resource_granular_backup": "SecureVault Archive"}
+    latest = {}
+    for backup in clumio_items("/backups/aws/rds-resources?limit=100&filter=" + clumio_filter(
+            {"resource_id": {"$eq": database["id"]}})):
+        tier = tiers.get(backup.get("type"))
+        if tier and backup.get("start_timestamp", "") > latest.get(tier, ""):
+            latest[tier] = backup["start_timestamp"]
+    return latest
+
+
+def latest_documents_recovery_point():
+    """The start time of the documents' latest SecureVault backup: "" if none yet, None if Clumio
+    hasn't made the protection group yet."""
+    groups = clumio_items("/datasources/protection-groups?filter=" + clumio_filter(
+        {"name": {"$eq": f"{NAMES['clumio_s3_policy_prefix']}{ACCOUNT}"}, "is_deleted": {"$eq": False}}))
+    if not groups:
+        return None
+    backups = clumio_items("/backups/protection-groups?limit=100&filter=" + clumio_filter(
+        {"protection_group_id": {"$eq": groups[0]["id"]}}))
+    return max((b.get("start_timestamp", "") for b in backups), default="")
+
+
+def readiness(seeded_at, database_points, documents_point, needs_archive=False):
+    """Whether Clumio holds recovery points of the loaded data: (is_ready, reason). Pure, so the
+    tests cover it. An incident before this is true could destroy the only copy. With the archive
+    on, it needs an archive point too: the archive runs monthly, so a late first one holds the damage."""
+    if database_points is None or not database_points.get("SecureVault Standard"):
+        return False, "no SecureVault recovery point of the database yet"
+    if not documents_point:
+        return False, "no SecureVault recovery point of the documents yet"
+    if needs_archive and not database_points.get("SecureVault Archive"):
+        return False, "no SecureVault Archive recovery point of the database yet"
+    if seeded_at:
+        points = [("the database's", database_points["SecureVault Standard"]), ("the documents'", documents_point)]
+        if needs_archive:
+            points.append(("the archive's", database_points["SecureVault Archive"]))
+        for whose, taken_at in points:
+            if parse_time(taken_at) < parse_time(seeded_at):
+                return False, f"{whose} latest recovery point is from before the data was loaded"
+    return True, "Clumio holds recovery points of the loaded data"
+
+
+def read_events():
+    """The evidence log, oldest first. ./lab record() writes it."""
+    path = os.path.join(EVIDENCE_DIR, "events.jsonl")
+    if not os.path.exists(path):
+        return []
+    with open(path) as log:
+        return [json.loads(line) for line in log]
+
+
+def since_last_down(events):
+    """The events of this deployment: everything after the last ./lab down."""
+    return events[max((i for i, e in enumerate(events) if e["event"] == "down"), default=-1) + 1:]
+
+
+def last_seed_time():
+    """When ./lab seed last ran in this deployment, from the evidence log, or None."""
+    return next((e["at"] for e in reversed(read_events()) if e["event"] == "seed"), None)
+
+
+def incident_since_deploy():
+    """The incident in the evidence log since the last ./lab down, if any."""
+    return next((e["event"] for e in since_last_down(read_events()) if e["event"] in INCIDENTS), None)
+
+
+def incident_spans(events):
+    """The evidence log as incidents: the one definition ./lab break and the scorecard share. Pure.
+    An incident opens at its break, gathers the checks after it, and ends at a HEALTHY check
+    ("healthy"), at ./lab down ("down"), or at the next incident ("next incident", which only an
+    older lab could log: the gates block it). "ended" is None while it's open."""
+    spans, current = [], None
+    for event in events:
+        if event["event"] in INCIDENTS:
+            if current:
+                current["ended"] = "next incident"
+            current = {"start": event, "checks": [], "ended": None}
+            spans.append(current)
+        elif current and event["event"] == "check":
+            current["checks"].append(event)
+            if event.get("state") == "HEALTHY":
+                current["ended"], current = "healthy", None
+        elif current and event["event"] == "down":
+            current["ended"], current = "down", None
+    return spans
+
+
+def incident_start(events, incident):
+    """What ./lab break does with the evidence log. Pure. Returns ("record", None) when no incident is
+    open, ("continue", its start time) when this one is open (a rerun after a stop), or ("blocked",
+    the open one)."""
+    spans = incident_spans(events)
+    if not spans or spans[-1]["ended"]:
+        return "record", None
+    start = spans[-1]["start"]
+    if start["event"] == incident:
+        return "continue", start["at"]
+    return "blocked", start["event"]
+
+
+def gate_incident(incident):
+    """The first step of every ./lab break. A different open incident stops here, before anything is
+    read, asked or changed. A new incident must pass the readiness gate. A rerun of the open one
+    skips it: readiness held when it started, and its own damage may now hide it. Returns the move
+    for open_incident()."""
+    move, detail = incident_start(read_events(), incident)
+    if move == "blocked":
+        stop(f"./lab {detail} is still open. Recover first, until ./lab check says HEALTHY. Nothing was changed")
+    if move == "record":
+        require_recovery_points()
+    return move, detail  # for "continue", detail is when the open incident started
+
+
+def open_incident(incident, move, started_at):
+    """The last step before the damage: records a new incident, so the scorecard has one start time
+    for it, even if the damage is interrupted and run again."""
+    if move == "continue":
+        say(f"continuing ./lab {incident}, which started {started_at}")
+    else:
+        record(incident)
+
+
+def require_recovery_points():
+    """Stops an incident while Clumio has no copy of the loaded data to recover from, or while the
+    copies would come from another policy than the workshop's."""
+    database = database_in_clumio()
+    if database:
+        reason = protection_reason(protection_owner(database, our_rds_policy_id()))
+        if reason:
+            stop(f"{reason}. Nothing was changed")
+    is_ready, reason = readiness(last_seed_time(), latest_database_recovery_points(database), latest_documents_recovery_point(),
+                                 is_archive_on())
+    if not is_ready:
+        stop(f"{reason}. Nothing was changed: run ./lab status, and wait until it says ready")
+
+
+# --- The check: what it reads, and its verdict ---------------------------------------------------
+
+# Information for Module 4, where it's compared with the archive's own SQL. Not part of the verdict.
+TOTALS_SQL = "SELECT COUNT(*) AS orders, SUM(total) AS total, SUM(note IS NULL) AS null_notes FROM orders"
+
+
+def describe_totals(totals):
+    """The totals line ./lab check prints."""
+    return f"{totals['orders']} orders, {totals['total'] or 0} in total, {totals['null_notes'] or 0} notes NULL"
+
+
+# The schema check. A record restore brings rows only, into the existing table: this proves the
+# table is still what it should be. A full restore brings the definition too: this proves it came back.
+
+def read_schema(cluster_arn):
+    """The tables' columns (name, type, NULL or NOT NULL) and indexes (name, column, unique or not),
+    as information_schema lists them."""
+    columns = sql(cluster_arn, "SELECT TABLE_NAME AS t, COLUMN_NAME AS c, COLUMN_TYPE AS type, IS_NULLABLE AS nullable "
+                               "FROM information_schema.columns WHERE table_schema = DATABASE() ORDER BY t, c")
+    indexes = sql(cluster_arn, "SELECT TABLE_NAME AS t, INDEX_NAME AS i, COLUMN_NAME AS c, NON_UNIQUE AS non_unique "
+                               "FROM information_schema.statistics WHERE table_schema = DATABASE() ORDER BY t, i, c")
+    return {"columns": [[r["t"], r["c"], r["type"], r["nullable"]] for r in columns],
+            "indexes": [[r["t"], r["i"], r["c"], int(r["non_unique"])] for r in indexes]}
+
+
+def schema_difference(saved, current):
+    """What differs between the schema ./lab seed saved and the one there now: [] when they match. Pure."""
+    differences = []
+    for part, label in (("columns", "column"), ("indexes", "index")):
+        saved_set, current_set = {tuple(x) for x in saved[part]}, {tuple(x) for x in current[part]}
+        differences += [f"{label} {' '.join(map(str, x))} missing" for x in sorted(saved_set - current_set)]
+        differences += [f"{label} {' '.join(map(str, x))} added" for x in sorted(current_set - saved_set)]
+    return differences
+
+
+def schema_finding(cluster_arn):
+    """Compares the schema now with the copy ./lab seed saved: "matches", "different: <the first
+    three differences>", or "not checked" before a seed."""
+    if not os.path.exists(SCHEMA_FILE):
+        return "not checked: ./lab seed saves it"
+    with open(SCHEMA_FILE) as file:
+        difference = schema_difference(json.load(file), read_schema(cluster_arn))
+    return "matches" if not difference else "different: " + ", ".join(difference[:3])
+
+
+def read_database(findings):
+    """Reads the live database: adds its schema and totals to findings, and returns its rows by id.
+    Returns None, with the reason in findings, when it can't be read."""
+    cluster = describe_cluster(NAMES["cluster"])
+    if cluster is None:
+        findings["database"] = "missing"
+        return None
+    if not cluster.get("HttpEndpointEnabled") or not cluster["DBClusterMembers"]:  # what ./lab prepare fixes
+        findings["database"] = f"not queryable: run ./lab prepare {NAMES['cluster']}"
+        return None
+    if describe_secret() is None:
+        findings["login secret"] = "missing"
+        return None
+    arn = cluster["DBClusterArn"]  # no probe: the reads below wait through a passing "starting" answer
+    # No status gate either: "backing-up" (Clumio backing it up) still serves queries. The first read names
+    # an answer that won't pass on its own, instead of stopping on it.
+    response, why_not = aws_answer(*sql_args(arn, "SELECT 1 AS found FROM information_schema.tables "
+                                                  "WHERE table_schema = DATABASE() AND table_name = 'orders'"),
+                                   absent_if=NOT_SERVING)
+    if response is None:
+        findings["database"] = f"not queryable: {why_not}"
+        return None
+    if not json.loads(response.get("formattedRecords") or "[]"):
+        findings["orders table"] = "missing: run ./lab seed"
+        return None
+    findings["schema"] = schema_finding(arn)
+    findings["totals"] = sql(arn, TOTALS_SQL)[0]
+    return {int(r["id"]): r for r in sql(arn, f"SELECT {', '.join(ORDER_COLUMNS)} FROM orders")}
+
+
+def read_document_hashes(findings):
+    """Each document's sha256 by order id, or None, with the reason added to findings."""
+    if not bucket_exists():
+        findings["documents bucket"] = "missing"
+        return None
+    hashes = {}
+    with tempfile.TemporaryDirectory() as folder:
+        run("aws", "s3", "sync", f"s3://{documents_bucket()}/{NAMES['documents_prefix']}", folder,
+            "--only-show-errors", "--region", REGION)
+        for name in os.listdir(folder):
+            match = re.fullmatch(r"order-(\d+)\.json", name)
+            if match:
+                hashes[int(match.group(1))] = sha256(open(os.path.join(folder, name)).read())
+    return hashes
+
+
+def database_time(value):
+    """A DATETIME as the RDS Data API or a CSV may write it, with or without the T and milliseconds;
+    None if it isn't one. Pure."""
+    match = re.fullmatch(r"(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d:\d\d)(?:\.(\d{1,6}))?", str(value))
+    if not match:
+        return None
+    return datetime.datetime.strptime(f"{match[1]} {match[2]}.{(match[3] or '').ljust(6, '0')}", "%Y-%m-%d %H:%M:%S.%f")
+
+
+def is_same_value(column, value, seeded):
+    """Whether a value read back equals the one ./lab seed loaded, in whatever form it's written:
+    370.5 and "370.50" are the same total. Text must match exactly. Pure."""
+    if value is None or seeded is None:
+        return value is None and seeded is None
+    if column == "total":
+        try:
+            return decimal.Decimal(str(value)) == decimal.Decimal(seeded)
+        except decimal.InvalidOperation:
+            return False
+    if column == "placed_at":
+        return database_time(value) is not None and database_time(value) == database_time(seeded)
+    return value == seeded
+
+
+def compare_rows(rows):
+    """Each row against what ./lab seed loaded: 0, or the count of changed orders with the columns that
+    changed. A NULL that became empty text, as a plain LOAD DATA does to Clumio's CSV, is a change like
+    any other: HEALTHY means exact. Pure."""
+    changed_columns, changed_orders = collections.Counter(), 0
+    for order_id, row in rows.items():
+        seeded = order_for(order_id)
+        differing = [c for c in ORDER_COLUMNS[1:] if not is_same_value(c, row.get(c), seeded[c])]  # [0] is the id
+        if differing:
+            changed_orders += 1
+            changed_columns.update(differing)
+    if not changed_orders:
+        return 0
+    columns = sorted(changed_columns.items(), key=lambda item: (-item[1], ORDER_COLUMNS.index(item[0])))
+    return f"{changed_orders} ({', '.join(f'{c}: {n}' for c, n in columns)})"
+
+
+def judge(orders, documents, findings):
+    """The check's verdict: adds the counts to findings, and is HEALTHY only when every order exists
+    unchanged, with its intact document, the control order included. Pure, so the tests cover it.
+    orders: the rows read, by order id, or None. documents: each document's sha256 by order id, or None."""
+    if orders is not None:
+        findings["orders missing"] = sum(1 for i in ORDER_IDS if i not in orders)
+        findings["orders changed"] = compare_rows(orders)
+    if documents is not None:
+        findings["documents missing"] = sum(1 for i in ORDER_IDS if i not in documents)
+        findings["documents changed"] = sum(1 for i in ORDER_IDS if i in documents and documents[i] != sha256(document_for(i)))
+    control_ok = (CONTROL_ORDER in (orders or ())
+                  and (documents or {}).get(CONTROL_ORDER) == sha256(document_for(CONTROL_ORDER)))
+    findings[f"control order {CONTROL_ORDER}"] = "intact" if control_ok else "BROKEN"
+    return all(is_fine(name, value) for name, value in findings.items())
+
+
+def is_fine(name, value):
+    """Whether one finding is fine: nothing missing or changed, or information only. The verdict and
+    the scorecard both use this, so they can't disagree."""
+    return name == "totals" or value in (0, "intact", "matches") or str(value).startswith("not checked")
+
+
+# --- The portal: one order at a time, in a browser on this computer ------------------------------
+#
+# Read-only. Every request reads the database and the document again, so the page shows the real
+# state during each incident. It runs on this computer with your AWS sign-in: no Lambda, no public
+# URL, nothing to deploy. Every failure is a named state on the page, never a crash: the page must
+# stay up while the data is gone.
+
+PORTAL_CALL_SECONDS = 20  # one AWS call at most; the CLI's own timeouts below come first
+SIGN_IN_EXPIRED = "your AWS sign-in expired: run aws sso login, then check again"
+DOCUMENT_MISSING = ("NoSuchKey", "NoSuchBucket")
+
+
+def judge_portal_order(order, document):
+    """The page's state and reason for one order. Pure. Each answer is (kind, value), with kind
+    found, missing, unavailable (the database only) or cant_check, whose value is the reason."""
+    kind, value = order
+    if kind == "cant_check":
+        return "CAN'T CHECK", value
+    if kind == "unavailable":
+        return "BROKEN", "database unavailable"
+    if kind == "missing":
+        return "BROKEN", "order missing from the database"
+    document_kind, text = document
+    if document_kind == "cant_check":
+        return "CAN'T CHECK", text
+    if document_kind == "missing":
+        return "BROKEN", "delivery document missing"
+    if sha256(text) != value["document_sha256"]:
+        return "BROKEN", "delivery document changed"
+    return "HEALTHY", "order and document match"
+
+
+def portal_failure(stderr):
+    """Why the portal can't check, in words the reader can act on. Pure."""
+    if "expired" in stderr.lower():
+        return SIGN_IN_EXPIRED
+    if "timeout" in stderr.lower() or "timed out" in stderr.lower():
+        return "AWS didn't answer in time"
+    code = re.search(r"An error occurred \(([^)]+)\)", stderr)
+    return f"AWS answered {code.group(1)}" if code else f"AWS failed: {stderr.strip()[:120]}"
+
+
+def parse_order_id(raw):
+    """An order number from the page, or None. The only input the portal takes. Pure."""
+    return int(raw) if re.fullmatch(r"[0-9]{1,4}", raw or "") and int(raw) in ORDER_IDS else None
+
+
+def is_local_host(host, port):
+    """Whether a request names this computer. Another name pointing at 127.0.0.1 (DNS rebinding)
+    could let a web page read the portal; the Host header tells them apart. Pure."""
+    return host in (f"localhost:{port}", f"127.0.0.1:{port}")
+
+
+def portal_call(*args):
+    """One AWS CLI call that never stops the portal: (answer, error code, reason)."""
+    command = ["aws", *args, "--region", REGION, "--output", "json", "--cli-connect-timeout", "3", "--cli-read-timeout", "10"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, cwd=HERE, timeout=PORTAL_CALL_SECONDS)
+    except subprocess.TimeoutExpired:
+        return None, None, "AWS didn't answer in time"
+    if result.returncode == 0:
+        return json.loads(result.stdout or "{}"), None, None
+    code = re.search(r"An error occurred \(([^)]+)\)", result.stderr)
+    return None, code.group(1) if code else None, portal_failure(result.stderr)
+
+
+def find_portal_order(cluster_arn, order_id):
+    answer, code, reason = portal_call(
+        "rds-data", "execute-statement", "--resource-arn", cluster_arn, "--secret-arn", secret_arn(),
+        "--database", NAMES["database"], "--format-records-as", "JSON",
+        "--sql", "SELECT id, customer, total, status, document_sha256 FROM orders WHERE id = :id",
+        "--parameters", json.dumps([{"name": "id", "value": {"longValue": order_id}}]))
+    if answer is None:
+        # Deleted, restoring, or without an instance or the Data API: what the incidents do to it.
+        return ("unavailable", None) if code in NOT_QUERYABLE else ("cant_check", reason)
+    rows = json.loads(answer.get("formattedRecords") or "[]")
+    return ("found", rows[0]) if rows else ("missing", None)
+
+
+def read_portal_document(order_id):
+    with tempfile.TemporaryDirectory() as folder:
+        body = os.path.join(folder, "document")
+        answer, code, reason = portal_call("s3api", "get-object", "--bucket", documents_bucket(),
+                                           "--key", document_key(order_id), body)
+        if answer is None:
+            return ("missing", None) if code in DOCUMENT_MISSING else ("cant_check", reason)
+        with open(body, encoding="utf-8") as file:
+            return "found", file.read()
+
+
+def check_portal_order(cluster_arn, order_id):
+    order = find_portal_order(cluster_arn, order_id)
+    document = read_portal_document(order_id) if order[0] == "found" else None
+    state, reason = judge_portal_order(order, document)
+    details = order[1] if order[0] == "found" else {"id": order_id}
+    return {**details, "state": state, "reason": reason}
+
+
+def open_portal_server(port):
+    """The portal's web server, on this computer only. A port in use stops with what to do."""
+    import http.server
+
+    # The cluster's ARN is its name: a restore under the same name answers at the same ARN.
+    cluster_arn = f"arn:aws:rds:{REGION}:{ACCOUNT}:cluster:{NAMES['cluster']}"
+
+    class Portal(http.server.BaseHTTPRequestHandler):
+        timeout = 30  # seconds a connection may sit idle, such as a browser's preconnect, before it's closed
+
+        def do_GET(self):
+            # The error boundary: a bug shows on the page as CAN'T CHECK with its reason, and in this
+            # terminal in full, never as a dropped connection the page would read as a stopped portal.
+            try:
+                self.answer()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the browser closed the tab or moved on: nothing to answer, nothing wrong
+            except Exception as error:
+                traceback.print_exc()
+                self.respond(500, {"state": "CAN'T CHECK", "reason": f"the portal hit an error ({type(error).__name__}): see its terminal"})
+
+        def answer(self):
+            if not is_local_host(self.headers.get("Host"), port):
+                return self.respond(403, {"error": f"open http://localhost:{port}"})
+            path, _, query = self.path.partition("?")
+            if path == "/":
+                return self.respond(200, PORTAL_PAGE, "text/html; charset=utf-8")
+            order_id = parse_order_id(urllib.parse.parse_qs(query).get("order", [""])[0])
+            if path not in ("/api/order", "/document"):
+                return self.respond(404, {"error": "not found"})
+            if order_id is None:
+                return self.respond(400, {"error": "order must be a number from 1 to 1000"})
+            if path == "/document":
+                kind, text = read_portal_document(order_id)
+                return self.respond(200, text, "application/json") if kind == "found" else self.respond(404, {"error": "document unavailable"})
+            result = check_portal_order(cluster_arn, order_id)
+            say(f"order {order_id}: {result['state']}, {result['reason']}")  # the terminal shows what the page shows
+            return self.respond(200, result)
+
+        def respond(self, status, body, content_type="application/json"):
+            data = (body if isinstance(body, str) else json.dumps(body, default=str)).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *_args):
+            pass  # one line per check (above) instead of one per request
+
+    try:
+        # A thread per connection, so a browser's idle preconnect can't hold up the page. Bounded in
+        # practice: only this computer can connect, and every connection times out (above).
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Portal)
+        server.daemon_threads = True  # Ctrl-C doesn't wait for an idle connection
+        return server
+    except OSError:
+        stop(f"port {port} is in use. Stop what uses it, or run ./lab portal --port {port + 1}")
+
+
+PORTAL_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orders portal</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 2rem auto; padding: 0 1rem; color: #111; }
+  .state { padding: .75rem 1rem; border-radius: .5rem; font-weight: 600; margin: 1rem 0; }
+  .HEALTHY { background: #e7f6ec; } .BROKEN { background: #fdeaea; } .WAITING { background: #f0f0eb; }
+  button { font-size: 1rem; padding: .6rem 1rem; margin-right: .5rem; }
+  pre { background: #f5f5f0; padding: 1rem; border-radius: .5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  small { color: #666; }
+</style></head><body>
+<h1>Orders portal</h1>
+<p>Sample data for a recovery workshop. Nothing here is real.</p>
+<label>Order <input id="order" type="number" min="1" max="1000" value="10"></label>
+<p><button onclick="busy(check)">Check order</button><button onclick="busy(openDocument)">Open document</button></p>
+<div id="state" class="state WAITING">Choose an order, then check it.</div>
+<pre id="detail"></pre>
+<small>Every check reads the database and the document again.</small>
+<script>
+  const order = () => document.getElementById("order").value;
+  const stopped = {state: "CAN'T CHECK", reason: "the portal isn't running: start ./lab portal in a terminal"};
+  async function busy(work) {  // one request at a time, so an older answer can't land after a newer one
+    const buttons = document.querySelectorAll("button");
+    buttons.forEach(button => button.disabled = true);
+    try { await work(); } finally { buttons.forEach(button => button.disabled = false); }
+  }
+  async function check() {
+    const stateBox = document.getElementById("state");
+    stateBox.className = "state WAITING";
+    stateBox.textContent = "Checking the database and the document...";
+    document.getElementById("detail").textContent = "";  // the last order's answer mustn't show under this check
+    const result = await fetch(`/api/order?order=${order()}`, {cache: "no-store"})
+      .then(response => response.json()).catch(() => stopped);
+    stateBox.className = `state ${{HEALTHY: "HEALTHY", BROKEN: "BROKEN"}[result.state] || "WAITING"}`;
+    stateBox.textContent = result.state ? `${result.state}: ${result.reason}` : result.error;
+    document.getElementById("detail").textContent = JSON.stringify(result, null, 2);
+  }
+  async function openDocument() {
+    const text = await fetch(`/document?order=${order()}`, {cache: "no-store"})
+      .then(response => response.ok ? response.text() : "Document unavailable.").catch(() => stopped.reason);
+    document.getElementById("detail").textContent = text;
+  }
+</script></body></html>"""
+
+
+# --- Record restore: the CSV Clumio returns, checked before use ----------------------------------
+
+def csv_records(text):
+    """The records of a CSV (RFC 4180), each a list of (value, was_quoted). Pure. Python's csv module
+    can't tell an empty unquoted field from a quoted "" before 3.12, and Clumio's record restore
+    writes NULL as the first and empty text as the second (seen live, 2026-10-24). A malformed quote
+    raises ValueError: a guessed value must never reach the database."""
+    records, record, position = [], [], 0
+    while True:
+        if text.startswith('"', position):
+            value, position = read_quoted_field(text, position, len(records) + 1)
+            record.append((value, True))
+        else:
+            end = min([i for i in (text.find(c, position) for c in ",\r\n") if i >= 0] or [len(text)])
+            record.append((text[position:end], False))
+            position = end
+        if text.startswith(",", position):
+            position += 1  # another field follows, possibly empty
+            continue
+        records.append(record)
+        record = []
+        position += 2 if text.startswith("\r\n", position) else 1  # past the line break, or past the end
+        if position >= len(text):
+            return records
+
+
+def read_quoted_field(text, position, record_number):
+    """One quoted field from its opening quote: (its value, the position after it). "" is a quote, and
+    commas and line breaks are data. It must end at a comma, a line break or the end of the file."""
+    parts, position = [], position + 1
+    while True:
+        close = text.find('"', position)
+        if close < 0:
+            raise ValueError(f"a quote in record {record_number} never closes")
+        parts.append(text[position:close])
+        if not text.startswith('""', close):
+            break
+        parts.append('"')
+        position = close + 2
+    position = close + 1
+    if position < len(text) and text[position] not in ",\r\n":
+        raise ValueError(f"text follows a closing quote in record {record_number}")
+    return "".join(parts), position
+
+
+def csv_time(order_id, text):
+    """A time from the CSV in the form the database takes (milliseconds): microseconds since 1970 in
+    UTC (how Clumio's record restore writes a DATETIME, seen live), or ISO 8601 with a T, a Z, an
+    offset or microseconds. Stops, naming the order, if it isn't a time this workshop could hold."""
+    epoch = datetime.datetime(1970, 1, 1)
+    if re.fullmatch(r"[0-9]{1,19}", text):
+        # The range is checked on the number itself, so a huge one can't overflow the conversion.
+        # Seconds or milliseconds, read as microseconds, land in 1970 and are refused here.
+        microseconds = int(text)
+        if not (EARLIEST_TIME - epoch) // datetime.timedelta(microseconds=1) <= microseconds < \
+                (LATEST_TIME - epoch) // datetime.timedelta(microseconds=1):
+            stop(f"order {order_id}: placed_at {text[:30]!r} isn't a time in microseconds since 1970, from 2000 to 2100")
+        moment = epoch + datetime.timedelta(microseconds=microseconds)
+    else:
+        try:
+            moment = datetime.datetime.fromisoformat(text.replace("T", " ").replace("Z", "+00:00"))
+            if moment.tzinfo:
+                moment = moment.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        except (ValueError, OverflowError):
+            stop(f"order {order_id}: placed_at {text[:30]!r} isn't a time")
+        if not EARLIEST_TIME <= moment < LATEST_TIME:
+            stop(f"order {order_id}: placed_at {text[:30]!r} isn't a time from 2000 to 2100")
+    return moment.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def read_orders_csv(path):
+    """The orders in a Clumio record-restore CSV, read by column name, so column order doesn't matter.
+    The file comes from outside, so every value is checked before it reaches the database."""
+    if not os.path.isfile(path):
+        stop(f"{path} not found. Drag the downloaded CSV into the terminal to paste its path")
+    size_mb = os.path.getsize(path) / 1_000_000
+    if size_mb > CSV_SIZE_LIMIT_MB:
+        stop(f"{path} is {size_mb:.1f} MB; a record restore of this workshop's orders is about 0.2 MB. Is it the right file?")
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as file:  # utf-8-sig: a spreadsheet's byte-order mark
+            text = file.read()
+    except UnicodeDecodeError:
+        stop("the CSV isn't UTF-8, the way Clumio writes it. Download it again from Clumio, and don't save it from a spreadsheet")
+    try:
+        records = csv_records(text)
+    except ValueError as error:
+        stop(f"the CSV is malformed: {error}. Download it again from Clumio, and don't save it from a spreadsheet")
+    header = [value for value, _quoted in records[0]] if records else []
+    names = [name.strip().lower() for name in header]
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        stop(f"the CSV's header names {', '.join(repeated)} twice. Download it again from Clumio")
+    for number, record in enumerate(records[1:], 2):
+        if record != [("", False)] and len(record) != len(header):  # a blank line is skipped below
+            stop(f"the CSV's record {number} has {len(record)} fields, the header has {len(header)}. "
+                 "Download it again from Clumio")
+    columns = {name: index for index, name in enumerate(names)}
+    # An empty unquoted field is NULL (None); a quoted "" is empty text.
+    rows = [{name: (value if value or quoted else None) for name, (value, quoted) in zip(header, record)}
+            for record in records[1:] if record != [("", False)]]
+    if not rows:
+        stop("the CSV has no rows. Check the query in docs/4-orders.md, step 4A")
+    lacking = [c for c in ORDER_COLUMNS if c not in columns]
+    if lacking:
+        stop(f"the CSV lacks {', '.join(lacking)}. Query with SELECT * (docs/4-orders.md, step 4A)")
+    orders_by_id = {}
+    for row in rows:
+        # Text stays exactly as exported (spaces and newlines are data), and a NULL note stays NULL.
+        # Every other column is NOT NULL, so a missing value reads as empty and its check below refuses it.
+        order = {c: row.get(header[columns[c]]) for c in ORDER_COLUMNS}
+        for c in ORDER_COLUMNS:
+            if c != "note" and order[c] is None:
+                order[c] = ""
+        for c in ("id", "total", "placed_at", "document_sha256"):
+            order[c] = order[c].strip()
+        if not (re.fullmatch(r"[0-9]{1,4}", order["id"]) and int(order["id"]) in ORDER_IDS
+                and re.fullmatch(r"[0-9a-f]{64}", order["document_sha256"])):
+            stop(f"the CSV has an order this workshop didn't make (id {order['id'][:20]!r}). Is it the right file?")
+        order["id"] = str(int(order["id"]))  # 010 and 10 are the same order
+        if not re.fullmatch(r"-?[0-9]+(\.[0-9]+)?", order["total"]):
+            stop(f"order {order['id']}: total {order['total'][:20]!r} isn't a number")
+        order["placed_at"] = csv_time(order["id"], order["placed_at"])
+        orders_by_id[order["id"]] = order  # one row per order, even if the file repeats one
+    return list(orders_by_id.values())
+
+
+# --- The scorecard: from each incident to HEALTHY ------------------------------------------------
+
+def format_duration(seconds):
+    hours, minutes = divmod(round(seconds / 60), 60)
+    return f"{hours} h {minutes} min" if hours else f"{minutes} min"
+
+
+def incident_scorecard(events):
+    """Each incident: the damage its first BROKEN check found, and how it ended, by name."""
+    scorecard = []
+    for span in incident_spans(events):
+        name = INCIDENTS[span["start"]["event"]]
+        broken = next((c for c in span["checks"] if c.get("state") == "BROKEN"), None)
+        if span["ended"] == "healthy" and broken is None:  # the break was interrupted before its damage
+            scorecard.append((name, "no damage found", "not applicable"))
+            continue
+        damage = ", ".join(f"{k}: {v}" for k, v in (broken or {}).get("findings", {}).items() if not is_fine(k, v))
+        if span["ended"] == "healthy":  # its last check is the HEALTHY one
+            took = format_duration((parse_time(span["checks"][-1]["at"]) - parse_time(span["start"]["at"])).total_seconds())
+        else:
+            took = {"down": "not recovered (./lab down)", "next incident": "not recovered before the next incident",
+                    None: "not HEALTHY yet"}[span["ended"]]
+        scorecard.append((name, damage or "not checked", took))
+    return scorecard
+
+
+if __name__ == "__main__":
+    main()

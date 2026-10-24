@@ -1,0 +1,10 @@
+# Optional and PERMANENT. Read README.md in this folder first.
+account_id    = "ACCOUNT-ID-REPLACE-THIS" # your 12-digit AWS account ID, as in step 1
+clumio_region = "REGION-REPLACE-THIS"     # your Clumio control-plane Region, such as us-west-2 (see README.md in this folder)
+
+key_id = "KEY-ID-REPLACE-THIS" # your multi-Region primary key in clumio_region (mrk-...); no key yet? see README.md in this folder
+
+iam_prefix = "" # as in step 1, if your IAM role names must start with a prefix
+
+# Set to true only when you've decided: your Clumio tenant stays bound to this key for good.
+i_understand_byok_is_permanent = false

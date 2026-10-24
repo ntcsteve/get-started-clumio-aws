@@ -8,7 +8,7 @@ terraform {
     }
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 6.0" # A new major version can change behaviour, so it's pinned.
+      version = "~> 6.0" # A new major version can change behavior, so it's pinned.
     }
   }
 }
