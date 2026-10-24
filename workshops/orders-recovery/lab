@@ -56,7 +56,17 @@ WAIT_LIMIT = f"{WAIT_SECONDS * WAIT_ROUNDS // 60} minutes"
 ROWS_PER_INSERT = 200  # well under the RDS Data API's request size limit
 CSV_SIZE_LIMIT_MB = 1  # a record restore of all 1,000 orders is about 0.2 MB
 EARLIEST_TIME, LATEST_TIME = datetime.datetime(2000, 1, 1), datetime.datetime(2101, 1, 1)  # sample data is from 2026
+# The orders table. To change a column, edit each of these, then run ./check.sh: its OneTableDefinition
+# test fails if the code places disagree.
+#   ORDER_COLUMNS and ORDERS_TABLE_SQL (here), order_for (the sample data), insert_parameters,
+#   read_orders_csv's type checks, and is_same_value if the column needs special comparing;
+#   tests/fixtures/record-restore-orders-6-to-10.csv; and every docs "You should see" block
+#   that prints totals or NULL counts.
 ORDER_COLUMNS = ("id", "customer", "total", "status", "note", "placed_at", "document_key", "document_sha256")
+ORDERS_TABLE_SQL = ("CREATE TABLE IF NOT EXISTS orders (id INT PRIMARY KEY, customer VARCHAR(80) NOT NULL, "
+                    "total DECIMAL(10,2) NOT NULL, status VARCHAR(20) NOT NULL, note TEXT NULL, placed_at DATETIME(3) NOT NULL, "
+                    "document_key VARCHAR(80) NOT NULL, document_sha256 CHAR(64) NOT NULL, INDEX by_placed_at (placed_at)) "
+                    "CHARACTER SET utf8mb4")
 SCHEMA_FILE = os.path.join(EVIDENCE_DIR, "schema.json")  # saved by ./lab seed, compared by ./lab check
 INCIDENTS = {"break deploy": "Bad deployment", "break everything": "Everything deleted"}
 ACCOUNT, REGION = None, None  # from terraform.tfvars, set by load_settings()
@@ -152,10 +162,7 @@ def cmd_seed(_args):
         stop(f"./lab seed is for a fresh deployment, and ./lab {incident} already ran in this one. "
              "To start over: ./lab down, then terraform apply")
     arn = prepare(NAMES["cluster"])
-    sql(arn, "CREATE TABLE IF NOT EXISTS orders (id INT PRIMARY KEY, customer VARCHAR(80) NOT NULL, "
-             "total DECIMAL(10,2) NOT NULL, status VARCHAR(20) NOT NULL, note TEXT NULL, placed_at DATETIME(3) NOT NULL, "
-             "document_key VARCHAR(80) NOT NULL, document_sha256 CHAR(64) NOT NULL, INDEX by_placed_at (placed_at)) "
-             "CHARACTER SET utf8mb4")
+    sql(arn, ORDERS_TABLE_SQL)
     insert_orders(arn, [order_for(i) for i in ORDER_IDS])
     deployment = ensure_deployment(arn)
     os.makedirs(EVIDENCE_DIR, exist_ok=True)
@@ -669,8 +676,8 @@ def insert_parameters(order):
 
 
 # IGNORE keeps rows that already exist, so a batch that's sent again never writes a row twice.
-INSERT_ORDER_SQL = ("INSERT IGNORE INTO orders (id, customer, total, status, note, placed_at, document_key, document_sha256) "
-                    "VALUES (:id, :customer, :total, :status, :note, :placed_at, :document_key, :document_sha256)")
+INSERT_ORDER_SQL = (f"INSERT IGNORE INTO orders ({', '.join(ORDER_COLUMNS)}) "
+                    f"VALUES ({', '.join(':' + c for c in ORDER_COLUMNS)})")
 
 
 def ensure_deployment(cluster_arn):

@@ -80,7 +80,7 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
 
 ## See what Clumio protects
 
-4. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. Its page shows the policy `orders-rds-<account ID>-<region>`, and a calendar with its recovery points. Then choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>-<region>`, and choose the bucket. Its page shows the protection group, the policy, and the objects backed up. Clumio found both by their tag. A new database or bucket with the same tag would be protected too, with no change to the code.
+4. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. Its page shows the policy `orders-rds-<account ID>-<region>`, and a calendar with its recovery points. The console can cut the policy's name short: point to it to see it whole. Then choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>-<region>`, and choose the bucket. Its page shows the protection group, the policy, and the objects backed up. Clumio found both by their tag. A new database or bucket with the same tag would be protected too, with no change to the code.
 
    ![Clumio, orders-db: its policy orders-rds and the first recovery points on the calendar](../images/1-2-rds-resources.png)
 

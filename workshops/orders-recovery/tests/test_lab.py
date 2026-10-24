@@ -928,6 +928,24 @@ class ConfirmAccount(unittest.TestCase):
         self.assertEqual(self.confirm(None, typed="nope")[:2], ("STOP", 1))
 
 
+class OneTableDefinition(unittest.TestCase):
+    """The orders table is written out in a few places, on purpose: plain SQL reads best. This test
+    makes them agree, so a missed edit fails here, never at a restore."""
+
+    def test_the_table_the_inserts_and_the_column_list_name_the_same_columns(self):
+        import re
+        body = lab.ORDERS_TABLE_SQL.split("(", 1)[1].rsplit(")", 1)[0]
+        created = [part.split()[0] for part in re.split(r",\s*(?![^()]*\))", body) if not part.strip().startswith("INDEX")]
+        inserted = re.search(r"INTO orders \(([^)]*)\)", lab.INSERT_ORDER_SQL).group(1).split(", ")
+        placeholders = re.search(r"VALUES \(([^)]*)\)", lab.INSERT_ORDER_SQL).group(1).split(", ")
+        parameters = [p["name"] for p in lab.insert_parameters(lab.order_for(1))]
+        self.assertEqual(created, list(lab.ORDER_COLUMNS))
+        self.assertEqual(inserted, list(lab.ORDER_COLUMNS))
+        self.assertEqual(placeholders, [":" + c for c in lab.ORDER_COLUMNS])
+        self.assertEqual(parameters, list(lab.ORDER_COLUMNS))
+        self.assertEqual(sorted(lab.order_for(1)), sorted(lab.ORDER_COLUMNS))
+
+
 class Names(unittest.TestCase):
     """Every name lives in names.json. A name seen beyond one account and Region, an S3 bucket
     (global) or a Clumio policy (the whole tenant), carries both, so two workshops never collide."""
