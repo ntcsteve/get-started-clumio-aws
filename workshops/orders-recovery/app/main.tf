@@ -66,8 +66,8 @@ resource "aws_rds_cluster" "orders" {
   storage_encrypted       = true
   backup_retention_period = 7    # Clumio's policy sets the same value.
   enable_http_endpoint    = true # The RDS Data API.
-  skip_final_snapshot     = true
-  apply_immediately       = true
+  skip_final_snapshot     = true # ./lab down leaves no snapshot to bill. Clumio keeps its recovery points.
+  apply_immediately       = true # A change takes effect now, not at the next maintenance window.
   tags                    = local.protection_tags
 }
 

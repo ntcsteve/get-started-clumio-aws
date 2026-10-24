@@ -9,7 +9,7 @@ Both can keep copies out of reach of your account. AWS Backup's logically air-ga
 | Roll an S3 bucket back in place | A restore doesn't replace objects that exist, or delete objects added since | Backtrack rolls a bucket or prefix back in place, from its own versions |
 | What an S3 restore can bring back | A whole bucket, or up to 5 objects or folders per restore job | An object, a prefix, or whole buckets |
 | Aurora in the air-gapped tier | Snapshot backups only; continuous backups aren't supported there | SecureVault Standard and Archive |
-| A few Aurora records back | Not documented: a restore brings back the whole cluster | SQL on an Archive copy returns only the matching rows, as a CSV file |
+| A few Aurora records back | Not documented: a restore brings back the whole cluster | SQL on an archive recovery point returns only the matching rows, as a CSV file |
 | Point in time | Continuous backup for S3 and Aurora, up to 35 days | AWS point-in-time recovery, which Clumio sets, plus SecureVault copies on its schedule |
 | Many accounts | AWS Organizations backup policies | CloudFormation StackSets, across an organization, its OUs, or a set of accounts |
 

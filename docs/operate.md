@@ -12,9 +12,21 @@ Part of [Get started with Clumio on AWS](../README.md). What you have after the 
 | RDS and Aurora | SecureVault Standard | Daily | 7 days | `standard_retention_days` |
 | RDS and Aurora | SecureVault Archive | Monthly | 12 months | `archive_retention_months` |
 
-## Restore
+## Choose the way back
 
-Start from what happened: [Choose the way back](../workshops/orders-recovery/docs/reference.md#choose-the-way-back), in the workshop's reference, matches each kind of incident to Clumio's way back. In the Clumio console, open the bucket, database or protection group, and choose Restore. Restore to a new prefix, bucket or database, never over live data. Backtrack is the exception: it rolls a bucket back in place.
+Start from what happened. Backtrack works in place. Every other way back gives you a new database, objects in a bucket you choose, or rows in a file: check the result, then put it to use.
+
+| What happened | Choose | Why |
+|---|---|---|
+| Objects overwritten or deleted, the bucket intact | Backtrack, to a point up to its last daily sync | In place: no new bucket, no change for the application |
+| A few rows deleted or wrong, that existed at the last monthly archive recovery point | Record restore from an archive recovery point, with SQL, then load the rows | Only the rows you need, without restoring the whole database |
+| Many rows wrong, or a table damaged | A full restore beside the original, then copy back what you need | Any size, and the live database stays online |
+| A wrong change minutes ago, the account intact | AWS point-in-time recovery, to a new cluster or instance | The fastest way back inside the account |
+| The database, the bucket, or their AWS copies deleted | A SecureVault restore. Recreate the bucket first | The copies live outside the account |
+| An account or Region unavailable | A restore into another connected account or Region | No dependency on the source account |
+| You need to look, not recover | Record restore's preview, with SQL | No database is restored |
+
+In the Clumio console, open the bucket, database or protection group, and choose **Restore**. Restore to a new prefix, bucket or database, never over live data. Backtrack is the exception: it rolls a bucket back in place. To practice each way back before you need it, run the [orders recovery workshop](../workshops/orders-recovery/README.md).
 
 ## Know when a backup fails
 
@@ -63,7 +75,19 @@ terraform {
 }
 ```
 
-**Upgrade from an earlier version.** Settings used to live in each step's committed `terraform.tfvars`; now each step ships `terraform.tfvars.example`, and your `terraform.tfvars` stays out of git.
+**Let Terraform own the backup policies.** Edits in the Clumio console are undone by the next apply. Change `terraform.tfvars` instead.
+
+**Grow by copying.** One copy of these folders per account and Region: don't change `account_id` or `region` in a folder that's already applied. This suits a handful of accounts. For a whole AWS Organization, Clumio documents onboarding with [CloudFormation StackSets](https://documentation.commvault.com/clumio/connecting_multiple_accounts_with_cloudformation_using_aws_organizations.html). Tag data by tier (gold, silver, bronze), with a step 2 folder per tier.
+
+**One Clumio tenant per state.** A token from another tenant can't see the connection and policies this state created, so Terraform would create a second set. Swapping a token within the same tenant is safe at any time.
+
+**Remove workloads carefully.** Removing one from `workloads` deletes its IAM, and Clumio stops protecting that data.
+
+## Upgrade
+
+### From f257189
+
+Settings used to live in each step's committed `terraform.tfvars`; now each step ships `terraform.tfvars.example`, and your `terraform.tfvars` stays out of git.
 
 1. If you applied `sample-data/`, run `terraform destroy` in it first: this version no longer has it, and what it created stays, and bills, until it's destroyed. Then run `git checkout -- sample-data/terraform.tfvars`.
 2. Before you pull, copy each step's `terraform.tfvars` somewhere outside the repo.
@@ -85,12 +109,14 @@ terraform {
 6. Run `terraform apply`, and enter `yes`. It records the moves, and changes nothing in AWS or Clumio. The next `terraform plan` says *No changes*.
 7. Run step 0 again, so the preview matches the new code.
 
-**Upgrade on purpose.** The module version is pinned in `modules/clumio-account-iam/main.tf`, and providers are locked in each `.terraform.lock.hcl`, so step 0 previews exactly what step 1 creates. To upgrade: change the module version, run `terraform init -upgrade` in each step, then step 0 again.
+### On purpose
 
-**Let Terraform own the backup policies.** Edits in the Clumio console are undone by the next apply. Change `terraform.tfvars` instead.
+The module version is pinned in `modules/clumio-account-iam/main.tf`, and providers are locked in each `.terraform.lock.hcl`, so step 0 previews exactly what step 1 creates. To upgrade: change the module version, run `terraform init -upgrade` in each step, then step 0 again.
 
-**Grow by copying.** One copy of these folders per account and Region: don't change `account_id` or `region` in a folder that's already applied. This suits a handful of accounts. For a whole AWS Organization, Clumio documents onboarding with [CloudFormation StackSets](https://documentation.commvault.com/clumio/connecting_multiple_accounts_with_cloudformation_using_aws_organizations.html). Tag data by tier (gold, silver, bronze), with a step 2 folder per tier.
+## Clumio's documentation
 
-**One Clumio tenant per state.** A token from another tenant can't see the connection and policies this state created, so Terraform would create a second set. Swapping a token within the same tenant is safe at any time.
-
-**Remove workloads carefully.** Removing one from `workloads` deletes its IAM, and Clumio stops protecting that data.
+- [Getting started with the Clumio provider](https://registry.terraform.io/providers/clumio-code/clumio/latest/docs/guides/getting_started): Clumio's one-file quick start, for a sandbox.
+- [IAM permissions required to deploy](https://documentation.commvault.com/clumio/iam_permissions_required_to_deploy_clumio_service.html): Clumio's deploy permissions, to compare with step 0.
+- [Permissions file details](https://documentation.commvault.com/clumio/permissions_file_details.html): why each role and permission exists.
+- [Inventory](https://documentation.commvault.com/clumio/inventory.html): what Clumio found, and its protection status.
+- [Best practices](https://documentation.commvault.com/clumio/best_practices_for_clumios_platform.html): tags, access and monitoring.

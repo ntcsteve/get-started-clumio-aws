@@ -7,9 +7,10 @@ You help a person run this workshop in their test AWS account. You run the `./la
 1. **Use the test account in `terraform.tfvars` only.** Every `./lab` command checks that the signed-in account matches it, and stops if it doesn't. Never edit `account_id` or `region` to get past that stop. Ask the person instead.
 2. **Ask before every deletion.** `./lab break deploy`, `./lab drop`, `./lab break everything`, and `./lab down` delete things. Before each one, tell the person what it deletes (its module page lists it), and wait for their go. One go covers one command. `break everything` and `down` can't be undone, so they ask for the account ID: pass it with `--confirm-account <account ID>` only after that go.
 3. **Never run `terraform destroy` yourself.** `./lab down` deletes what Terraform doesn't know about first, then runs it.
-4. **Keep the Clumio token secret.** The person exports `CLUMIO_API_TOKEN` and `CLUMIO_API_BASE_URL` in your shell before you start (`docs/0-setup.md`, "Start a session"). Never ask for the token in chat, print it, or write it to a file.
+4. **Keep secrets out of sight.** The person exports `CLUMIO_API_TOKEN`, `CLUMIO_API_BASE_URL` and `AWS_PROFILE` in the shell that starts you, before you start (`docs/0-setup.md`, "Start a session"). Many agent shells start fresh for every command, so a variable set later can be lost. Never ask for the token in chat, print it, or write it to a file. Never read `terraform.tfstate`, `tfplan` or `terraform show`: they hold the database password and Clumio's ExternalId.
 5. **Run one command at a time, and show its full output.** Don't cut the output with `tail` or `head`, and don't chain a deletion after another command. The person must see each step.
 6. **Never edit `lab`, the Terraform files, or `names.json` during a run.** If something looks wrong, stop and tell the person.
+7. **Run `terraform apply` only in Module 1, before any incident.** After an incident and a restore, the account no longer matches what Terraform built, and an apply could replace the restored database. If `./lab status` names another policy's rule, the fix in `docs/reference.md` needs an apply: do it only before `./lab break deploy`.
 
 ## How to read a result
 
@@ -26,7 +27,8 @@ You help a person run this workshop in their test AWS account. You run the `./la
 | 1 | You | `./lab check` | `HEALTHY` |
 | 1 | You | `./lab portal`, left running in the background. The person opens http://localhost:8080 | `portal: open http://localhost:8080` |
 | 1 | You | `./lab status`, until it says ready | `ready for the incidents  yes` |
-| 1 | Person | Opens the archive point in the Clumio console, and prepares it if Clumio asks | Record restore opens, or Clumio emails when it's ready |
+| 1 | Person | Opens the archive recovery point in the Clumio console, and prepares it if Clumio asks | Record restore opens, or Clumio emails when it's ready |
+| 1 | Person | Checks the bucket's **Backtrack** tab. Don't start Module 2 before it shows a Last sync: `./lab status` can't see it, and Module 3 needs it | **Last sync** with a date and time |
 | 2 | You, with the person's go | `./lab break deploy`. Tell the person the change time it prints | `Bad deployment at <time> UTC` |
 | 2 | You | `./lab check` | `BROKEN`, with 100 orders missing and 50 documents changed |
 | 3 | Person | Backtrack in the Clumio console | The person gives you the task ID |

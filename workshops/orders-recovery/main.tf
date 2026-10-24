@@ -25,8 +25,8 @@ module "app" {
 }
 
 # Workshop only: loads the sample data before the Clumio policies exist, so Clumio's first recovery
-# points already hold it. Production data never comes from Terraform. Safe to rerun: ./lab seed
-# leaves existing orders as they are.
+# points already hold it. Production data never comes from Terraform. Safe to rerun before an incident:
+# ./lab seed leaves existing orders as they are, and refuses to run after one.
 resource "terraform_data" "sample_data" {
   depends_on = [module.app]
 
@@ -65,7 +65,7 @@ module "rds_protection" {
   database_tag = local.names.protection_tag
 
   pitr_retention_days      = 7 # Same as backup_retention_period in app/main.tf, so Clumio changes nothing.
-  standard_retention_days  = 7
+  standard_retention_days  = 7 # Short, to keep the workshop's cost low: Modules 4B and 5 use the newest point.
   archive_retention_months = var.archive_retention_months
   before_rule_id           = var.rds_rule_before_id
 }
@@ -80,5 +80,5 @@ module "s3_protection" {
   bucket_tag = local.names.protection_tag
 
   standard_retention_days    = 30 # Clumio's S3 minimum
-  backtrack_retention_months = 1
+  backtrack_retention_months = 1  # Module 3 rolls back hours, not months.
 }

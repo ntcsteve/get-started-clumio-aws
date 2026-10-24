@@ -58,7 +58,7 @@ A test account is an AWS account with no real data. The workshop builds a small 
    read -rs CLUMIO_API_TOKEN && export CLUMIO_API_TOKEN
    ```
 
-7. Set the Clumio API URL. If you sign in at portal.clumio.com, use the URL below. For other portals, see the table in [step 1b](../../../1b-own-key/README.md).
+7. Set the Clumio API URL. If you sign in at portal.clumio.com, use the URL below. For other portals, see the table in [Before you begin](../../../README.md#before-you-begin).
 
    ```bash
    export CLUMIO_API_BASE_URL=https://us-west-2.api.clumio.com
@@ -88,7 +88,7 @@ A test account is an AWS account with no real data. The workshop builds a small 
 
     If your organization requires tags, or a permissions boundary on IAM roles, set them in the same file. Its comments show how. Otherwise, leave them as they are.
 
-    Leave `archive_retention_months = 1`. It keeps archive copies, and their cost, as short as Clumio allows. Clumio charges an early-deletion fee for archive copies kept under 12 months.
+    Leave `archive_retention_months = 1`. It keeps archive recovery points, and their cost, as short as Clumio allows. Clumio charges an early-deletion fee for archive recovery points kept under 12 months.
 
 ## Check that the account is ready
 

@@ -32,7 +32,7 @@ The step from a workshop to your own estate: protect one of your own non-product
 2. For a database, set `pitr_retention_days` to its current value, so nothing changes for it.
 3. Wait for the first recovery points. Then recover a copy into a new cluster or bucket, as in Module 4B or 5.
 4. Check it with your own tests: row counts and totals of key tables, and a smoke test of the application. Note the time it took. Then delete the copy.
-5. Keep [Choose the way back](reference.md#choose-the-way-back) with your incident runbooks. Set an impact tolerance for the service, as AnyCompany did. Then repeat the recovery test on a schedule, so its time stays current, and hold each result against that tolerance.
+5. Keep [Choose the way back](../../../docs/operate.md#choose-the-way-back) with your incident runbooks. Set an impact tolerance for the service, as AnyCompany did. Then repeat the recovery test on a schedule, so its time stays current, and hold each result against that tolerance.
 
 You'll learn what this workshop can't tell you: how long protection and recovery take at your size, and whether your own checks pass.
 
@@ -40,11 +40,11 @@ You'll learn what this workshop can't tell you: how long protection and recovery
 
 ## Summary
 
-AnyCompany's Friday release, and the worst case after it, are both behind you. You deployed an application with its protection as code, broke it twice, recovered it, and measured how long each recovery took. You learned how to:
+AnyCompany's Friday deployment, and the worst case after it, are both behind you. You deployed an application with its protection as code, broke it twice, recovered it, and measured how long each recovery took. You learned how to:
 
 - Protect a database and a bucket with Clumio policies that deploy with the application
-- Measure what a release did to the data, even when nothing alerts
-- Roll documents back in place with Backtrack, to a point before the release
+- Measure what a bad deployment did to the data, even when nothing alerts
+- Roll documents back in place with Backtrack, to a point before the bad deployment
 - Choose by the size of the damage: records from an archive with SQL, or a whole database beside the original
 - Recover after the database, the bucket, and their AWS backups were deleted
 - Prove a recovery with a scorecard and Clumio's task records

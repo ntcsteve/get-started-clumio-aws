@@ -17,7 +17,7 @@ Part of [Get started with Clumio on AWS](../README.md). New to AWS or Clumio? Re
 | S3 Versioning | S3 keeps every earlier version of a file when it changes, so you can go back to one. |
 | Prefix | The start of a file's name in S3, such as `documents/`. It works like a folder. |
 | Amazon Aurora | AWS's managed database, compatible with MySQL. A cluster holds the data; an instance runs the queries. |
-| Point-in-time recovery (PITR) | AWS's own backup of a database, kept for a few days inside your account. |
+| Point-in-time recovery (PITR) | AWS's own backup of a database, kept for a few days inside your account. The Clumio console calls it AWS automated backups. |
 | AWS KMS key | An encryption key that AWS keeps for you. |
 | Terraform | A tool that creates cloud resources from code, so the same code builds the same thing every time. |
 | Plan, apply | Terraform's two moves: `plan` shows what will change, and `apply` makes the change after you enter `yes`. |
@@ -37,10 +37,12 @@ Part of [Get started with Clumio on AWS](../README.md). New to AWS or Clumio? Re
 | Recovery point | One copy of your data at one moment, which you can recover from. Clumio's console calls it a backup. |
 | SecureVault | Clumio's storage for copies: air-gapped (kept apart from your account) and immutable (can't be changed). |
 | SecureVault Standard | Daily copies, kept days or weeks. Restores a whole database or bucket. |
+| Tier | Where Clumio keeps a recovery point, and for how long: SecureVault Standard or SecureVault Archive. |
 | SecureVault Archive | Monthly copies, kept longer at lower cost. Answers SQL questions, and returns selected rows. |
 | Backtrack | Rolls an S3 bucket back in place, to a point in time up to its last daily sync, from the bucket's own object versions. |
-| Restore | Brings data back from a recovery point. For a database, Clumio always makes a new one beside the original. |
-| Record restore | SQL on an Archive copy. It returns only the rows you ask for, as a CSV file. |
+| Restore | Brings data back from a recovery point. For a database, Clumio makes a new cluster or instance with the name you choose: beside the original, or under the original's name once it's gone. |
+| Way back | One way to recover from one kind of incident, such as Backtrack or a full restore. [Choose the way back](operate.md#choose-the-way-back) lists them. |
+| Record restore | SQL on an Archive recovery point. It returns only the rows you ask for, as a CSV file. |
 | BYOK | Bring your own key: Clumio encrypts its copies with your AWS KMS key. Optional, and permanent. |
 
 ## This repository

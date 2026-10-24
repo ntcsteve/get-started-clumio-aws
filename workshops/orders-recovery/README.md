@@ -1,6 +1,6 @@
 # Orders recovery with Clumio
 
-It's Friday, 17:00. AnyCompany's platform team ships a release. Every service stays green, and no alarm fires. By Monday, customers report missing orders and wrong delivery notes.
+It's Friday, 17:00. AnyCompany's platform team ships its Friday deployment. Every service stays green, and no alarm fires. By Monday, customers report missing orders and wrong delivery notes.
 
 In this workshop, you run AnyCompany's orders application in a test AWS account, protect it with Clumio, and recover from that Friday. Then you recover from something worse: the database, the bucket, and every copy AWS kept, all deleted. After each recovery, a check proves that every order has its document again.
 
@@ -11,8 +11,8 @@ New to AWS or Clumio? Keep [Words you'll see](../../docs/words.md) open beside t
 
 **What you'll do:**
 
-- Roll 50 overwritten documents back in place, to a point before the release.
-- Ask an air-gapped archive what the release deleted, with SQL, and restore nothing.
+- Roll 50 overwritten documents back in place, to a point before the bad deployment.
+- Ask an air-gapped archive what the bad deployment deleted, with SQL, and restore nothing.
 - Bring back the 100 deleted orders, as records from the archive or from a full restore beside the live database, then check every value and the schema against what was loaded.
 - Bring the whole application back after every copy in the account is gone.
 - End with a scorecard: each incident, its damage, and your measured time back to HEALTHY.
@@ -27,7 +27,7 @@ New to AWS or Clumio? Keep [Words you'll see](../../docs/words.md) open beside t
 | **Cost** | One Aurora `db.r6g.large` instance while the workshop runs, and Clumio for what it protects. See [Cost](#cost) |
 | **AWS services** | Amazon Aurora with the RDS Data API, Amazon S3, AWS Secrets Manager |
 | **Clumio features** | SecureVault Standard and Archive, Backtrack, record restore, and protection as code |
-| **Status** | Run end to end once, live, on 2026-10-24. Changes since then are tested offline. [SECURITY.md](../../SECURITY.md#what-is-proven-and-what-isnt) lists what's tested |
+| **Status** | See [what is proven, and what isn't](../../SECURITY.md#what-is-proven-and-what-isnt) |
 
 ## What is Clumio
 
@@ -67,13 +67,13 @@ One `terraform apply` builds the application, loads its data, and then turns on 
 |---|---|
 | [0. Set up](docs/0-setup.md) | Install the tools, sign in, and check that the account is ready |
 | [1. Deploy and protect](docs/1-deploy.md) | Deploy the application with its data and its protection, in one apply |
-| [2. Break](docs/2-break.md) | Ship AnyCompany's Friday release, and measure what it did |
+| [2. Break](docs/2-break.md) | Ship AnyCompany's Friday deployment, and measure what it did |
 | [3. Recover the documents](docs/3-documents.md) | Roll documents back in place with Backtrack |
 | [4. Recover the orders](docs/4-orders.md) | Choose by the size of the damage: records with SQL, or a whole database |
 | [5. Survive](docs/5-survive.md) | Recover after the database, the bucket, and their AWS backups are deleted |
 | [6. Prove](docs/6-prove.md) | Read your scorecard, with Clumio's task records |
 | [7. Clean up](docs/7-clean-up.md) | Delete the workshop, then take the next step on your own data |
-| [Reference](docs/reference.md) | Choose the way back, how data moves, commands, troubleshooting, glossary |
+| [Reference](docs/reference.md) | Which way back this workshop practices, how data moves, commands, troubleshooting |
 
 ## Before you start
 
@@ -86,7 +86,7 @@ You need:
 
 **Plan for two sessions.** Session 1 builds and protects the application. Session 2 runs the incidents.
 
-**The archive may need preparing before you can query it,** which can take up to 48 hours. A new archive point opens at once. Once it has moved to cold storage, you prepare it at the end of Module 1, so it's ready by the second session.
+**The archive may need preparing before you can query it,** which can take up to 48 hours. A new archive recovery point opens at once. Once it has moved to cold storage, you prepare it at the end of Module 1, so it's ready by the second session.
 
 Regulated teams: to have Clumio encrypt its copies with your own AWS KMS key, see [step 1b of the kit](../../1b-own-key/README.md). It's permanent, so it isn't part of this workshop.
 
@@ -101,7 +101,7 @@ Regulated teams: to have Clumio encrypt its copies with your own AWS KMS key, se
 | SecureVault Standard, Aurora | Clumio's air-gapped vault | Orders lost or wrong, or the database deleted |
 | SecureVault Archive, Aurora | Clumio's air-gapped vault, at lower cost, kept longer | Questions answered, and a few rows back, with SQL, without restoring the whole database |
 
-Aurora's own point-in-time recovery also runs in your account, kept for 7 days by the Clumio policy. The Clumio console calls it **AWS automated backups**. This workshop recovers with Clumio's tiers, which also work when the account's own copies are gone.
+Aurora's own point-in-time recovery also runs in your account, kept for 7 days by the Clumio policy. This workshop recovers with Clumio's tiers, which also work when the account's own copies are gone.
 
 **A restore creates a new database.** Clumio restores Aurora as a new cluster, beside the original, with a name you choose.
 
@@ -109,11 +109,11 @@ Aurora's own point-in-time recovery also runs in your account, kept for 7 days b
 
 **Resilience operations.** The modules follow the loop that Commvault's [Resilience Operations (ResOps)](https://www.commvault.com/explore/resilience-operations) describes: discover and protect (Module 1), detect (Module 2), recover and restore (Modules 3 to 5), then measure the result (Module 6). The loop starts from an impact tolerance: how much disruption the business can accept. AnyCompany's is no order lost, and every order back within one hour. `./lab check` is the test of that promise, which ResOps calls a service resilience indicator.
 
-Clumio can also restore into another connected account or Region, for an outage or a fresh test environment. During a real incident, start from [Choose the way back](docs/reference.md#choose-the-way-back).
+Clumio can also restore into another connected account or Region, for an outage or a fresh test environment. During a real incident, start from [Choose the way back](../../docs/operate.md#choose-the-way-back).
 
 ## Cost
 
-The workshop runs one Aurora `db.r6g.large` instance. Module 4B adds a restored cluster with its own instance until you delete it. The bucket and the network cost little. Clumio charges for what it protects. [Clean up](docs/7-clean-up.md) stops the AWS charges. Recovery points that Clumio already took stay until their retention ends: 7 days for the database, 30 days for the documents, and 1 month for the archive. That's the shortest Clumio allows; Clumio charges an early-deletion fee for archive copies kept under 12 months.
+The workshop runs one Aurora `db.r6g.large` instance. Module 4B adds a restored cluster with its own instance until you delete it. The bucket and the network cost little. Clumio charges for what it protects. [Clean up](docs/7-clean-up.md) stops the AWS charges. Recovery points that Clumio already took stay until their retention ends: 7 days for the database, 30 days for the documents, and 1 month for the archive. That's the shortest Clumio allows; Clumio charges an early-deletion fee for archive recovery points kept under 12 months.
 
 ## What's in this folder
 

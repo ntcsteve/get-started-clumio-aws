@@ -2,29 +2,29 @@
 
 **Requires:** [3. Recover the documents](3-documents.md). In a new terminal, first [start a session](0-setup.md#start-a-session).
 
-The release deleted 100 orders. Customers kept ordering since, so rolling the whole database back would lose their orders too. Instead, you bring back only the 100 that are missing. You do it two ways, in order. In a real incident, you'd pick one, by the size of the damage.
+The bad deployment deleted 100 orders. Customers kept ordering since, so rolling the whole database back would lose their orders too. Instead, you bring back only the 100 that are missing. You do it two ways, in order. In a real incident, you'd pick one, by the size of the damage.
 
 | Way back | When to use it | What it takes |
 |---|---|---|
-| **4A. Records** (first) | A few rows that existed at the last monthly archive point | SQL on an archive recovery point returns just those rows, with no restore. Preparing the archive can take up to 48 hours |
+| **4A. Records** (first) | A few rows that existed at the last monthly archive recovery point | SQL on an archive recovery point returns just those rows, with no restore. Preparing the archive can take up to 48 hours |
 | **4B. Whole database** (then) | Damage of any size | A full restore beside the original. You copy back only what's missing |
 
 **With AWS's own backups:** a restore brings back the whole cluster. Then you find the 100 rows and copy them back yourself.
 
 ## 4A. Records from the archive
 
-**Requires:** the archive point from [Module 1, step 7](1-deploy.md#wait-for-the-first-recovery-points), ready to query. It was taken before the release, so it holds every order the release deleted.
+**Requires:** the archive recovery point from [Module 1, step 7](1-deploy.md#wait-for-the-first-recovery-points), ready to query. It was taken before the bad deployment, so it holds every order the bad deployment deleted.
 
 1. Open **Record restore**: from Clumio's email, or in the Clumio console under **AWS**, **Inventory**, **RDS resources**, `orders-db`, by choosing **Restore** on that archive recovery point.
 
-   Clumio offers **Prepare records for restore** instead? The point is in cold storage. Choose it, and come back when Clumio emails that it's ready, which can take up to 48 hours. If no archive point is from before the change time, use 4B.
+   Clumio offers **Prepare records for restore** instead? The point is in cold storage. Choose it, and come back when Clumio emails that it's ready, which can take up to 48 hours. If no archive recovery point is from before the change time, use 4B.
 
 > [!NOTE]
 > Clumio makes the archive recovery point ready for SQL in its own vault. Nothing is restored into your account.
 
 2. In **Schema browser**, next to the `orders` table, choose the copy icon. It copies the table's full name.
 
-3. Enter this query with the name you copied, and choose **Preview first 10 records**. It selects every tenth order: exactly the ones the release deleted. Without `ORDER BY`, the preview shows them in no set order.
+3. Enter this query with the name you copied, and choose **Preview first 10 records**. It selects every tenth order: exactly the ones the bad deployment deleted. Without `ORDER BY`, the preview shows them in no set order.
 
    ```sql
    SELECT * FROM <orders table> WHERE id % 10 = 0 ORDER BY id
@@ -113,9 +113,12 @@ A record restore returns rows, not the table's definition. The CSV holds values;
 Two things to know before you rely on it in production:
 
 - **The archive's types aren't the database's.** The Schema browser lists `placed_at` as `bigint`, and the CSV writes it as microseconds since 1970 in UTC. `./lab repair --from-csv` converts it back to `DATETIME(3)`, and checks every row before it writes. Validate against the live schema, never the archive's.
-- **Rows can't repair a structure.** If a release drops a column, changes a type or removes an index, the CSV has nowhere to go. Restore the whole database instead, as in 4B or Module 5: it comes back with its schema, and `./lab check` compares that schema the same way. In production, keep the table definitions in versioned migrations, so you can compare a restore with what should be there.
+- **Rows can't repair a structure.** If a deployment drops a column, changes a type or removes an index, the CSV has nowhere to go. Restore the whole database instead, as in 4B or Module 5: it comes back with its schema, and `./lab check` compares that schema the same way. In production, keep the table definitions in versioned migrations, so you can compare a restore with what should be there.
 
 ### In production: the same steps in SQL
+
+> [!WARNING]
+> Not run live. The `./lab` path above was proven in the test run. This SQL follows [MySQL's documented behavior](https://dev.mysql.com/doc/refman/8.0/en/load-data.html). Test the `CASE` column in Clumio's record restore, and `LOAD DATA` on Aurora MySQL 3, before you rely on it.
 
 `./lab repair --from-csv` stages the file, checks it, and copies only the missing orders. Without `./lab`, a DBA does the same in four steps: stage, validate, merge, reconcile. Two details decide whether the data comes back exact:
 
@@ -162,8 +165,6 @@ DROP TABLE orders_restore;
 ```
 
 On Aurora, `LOAD DATA FROM S3` loads the file from a bucket instead of your computer. It needs an IAM role on the cluster: see [Loading data into Aurora MySQL from Amazon S3](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Integrating.LoadFromS3.html). Then compare the table's definition with your migrations: `SHOW CREATE TABLE orders`.
-
-<!-- Not run in this workshop: the ./lab path was proven live (2026-10-24); this SQL path is MySQL's documented behavior (dev.mysql.com/doc/refman/8.0/en/load-data.html). Verify the CASE column in Clumio's record restore, and LOAD DATA on Aurora MySQL 3, before relying on it. -->
 
 ## 4B. The other way: the whole database
 
@@ -223,6 +224,6 @@ On Aurora, `LOAD DATA FROM S3` loads the file from a bucket instead of your comp
    orders-db-restore deleted
    ```
 
-**Key takeaway:** Choose the way back by the size of the damage: a few rows from the archive, or a whole database beside the original. Either way, the live database stays online. Only missing orders are copied, so in production, orders placed since the release stay as they are.
+**Key takeaway:** Choose the way back by the size of the damage: a few rows from the archive, or a whole database beside the original. Either way, the live database stays online. Only missing orders are copied, so in production, orders placed since the bad deployment stay as they are.
 
 **Next:** [5. Survive](5-survive.md)

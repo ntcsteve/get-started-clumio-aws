@@ -16,18 +16,7 @@
 **What you need.** Set `1b-own-key/terraform.tfvars`:
 
 - `account_id`: the account from step 1.
-- `clumio_region`: your Clumio control-plane Region, set when your Clumio account was created. It's often not where your data is.
-
-  | Clumio portal | `clumio_region` |
-  |---|---|
-  | portal.clumio.com, west.portal.clumio.com | us-west-2 |
-  | east.portal.clumio.com | us-east-1 |
-  | canada.portal.clumio.com | ca-central-1 |
-  | eu1.portal.clumio.com | eu-central-1 |
-  | au.portal.clumio.com | ap-southeast-2 |
-  | jp.portal.clumio.com | ap-northeast-1 |
-
-  Your `CLUMIO_API_BASE_URL` starts with it too, for example `https://us-west-2.api.clumio.com`. For another portal, ask your Clumio administrator.
+- `clumio_region`: your Clumio control-plane Region, set when your Clumio account was created. It's often not where your data is. Find it from your portal, in the table in [Before you begin](../README.md#before-you-begin).
 
 - `key_id`: your key's ID (`mrk-...`). It must be a customer-managed, symmetric, multi-Region primary key, enabled, in `clumio_region` and in this account. The plan checks each of these and stops, before anything is created, if one fails.
 - `iam_prefix`: as in step 1, if your IAM role names need a prefix.

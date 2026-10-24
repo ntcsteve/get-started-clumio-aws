@@ -123,7 +123,7 @@ A SecureVault restore for S3 writes into a bucket that exists, and that Clumio a
     ![The orders portal: order 10 HEALTHY again, on the same page](../images/5-5-portal-healthy-again.png)
 
 > [!NOTE]
-> In this workshop, use recovery points from before the change time in Module 2. A later one could have been taken between the release and your repairs, and would hold the release's damage. In production, choose the latest point taken while the data was healthy.
+> In this workshop, use recovery points from before the change time in Module 2. A later one could have been taken between the bad deployment and your repairs, and would hold the bad deployment's damage. In production, choose the latest point taken while the data was healthy.
 
 **Key takeaway:** Every copy in the account was gone, and the application came back from Clumio's air-gapped recovery points. Isolation keeps a way back when the blast radius covers the whole account.
 

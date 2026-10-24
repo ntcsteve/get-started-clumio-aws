@@ -881,9 +881,42 @@ class ConfirmAccount(unittest.TestCase):
         self.assertEqual((outcome, prompts), ("STOP", 0))
         self.assertIn("Nothing was deleted", error)
 
+    def test_with_no_one_to_type_it_says_to_pass_the_flag(self):
+        # An agent's shell has no terminal: input() ends at once. "Didn't match" would read like a typo.
+        import builtins
+        saved = (lab.ACCOUNT, builtins.input)
+        lab.ACCOUNT = "123456789012"
+
+        def no_terminal(_prompt):
+            raise EOFError
+        builtins.input = no_terminal
+        error = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(error), \
+                    self.assertRaises(SystemExit):
+                lab.confirm_by_account_id(["database orders-db"])
+        finally:
+            lab.ACCOUNT, builtins.input = saved
+        self.assertIn("no one typed the account ID", error.getvalue())
+        self.assertIn("--confirm-account", error.getvalue())
+        self.assertIn("Nothing was deleted", error.getvalue())
+
     def test_without_the_flag_a_person_types_it(self):
         self.assertEqual(self.confirm(None, typed="123456789012")[:2], ("go", 1))
         self.assertEqual(self.confirm(None, typed="nope")[:2], ("STOP", 1))
+
+
+class MissingSecret(unittest.TestCase):
+    def test_it_names_the_command_that_creates_it(self):
+        saved = (lab.describe_secret, lab._secret_arn)
+        lab.describe_secret, lab._secret_arn = (lambda: None), None
+        error = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(error), self.assertRaises(SystemExit):
+                lab.secret_arn()
+        finally:
+            lab.describe_secret, lab._secret_arn = saved
+        self.assertIn("terraform apply creates it", error.getvalue())
 
 
 class ConfirmAccountWiring(unittest.TestCase):

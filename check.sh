@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Checks for changes to this kit itself: run before every commit. Works on copies of each
-# step's shipped files (never your .terraform, backend.tf or state). Needs the Terraform
-# registry, and a few minutes. Makes no AWS or Clumio calls: the shipped placeholders stop every
+# Checks for changes to this kit itself: run before every commit. Works on copies of the shipped
+# files only (never your .terraform, backend.tf, terraform.tfvars or state). Needs Terraform 1.7+
+# (for the mock-provider tests), the Terraform registry, and a few minutes. Makes no AWS or Clumio calls: the shipped placeholders stop every
 # plan, and the tests use mock providers.
 #   1. terraform fmt          every .tf and .tfvars is formatted
 #   2. terraform validate     each step, with its committed lock file
@@ -51,12 +51,13 @@ cp -R 1b-own-key/tests "$COPIES/1b-own-key/"
   && pass "1b-own-key: key checks and permanence gate" || flunk "1b-own-key: terraform test (run it in 1b-own-key to see why)"
 
 W=workshops/orders-recovery
-mkdir -p "$COPIES/w" && cp -R "$W" "$COPIES/w/"   # the workshop calls ../../modules, copied above
-(cd "$COPIES/w/orders-recovery" && python3 -m py_compile lab 2> /dev/null) \
+# Only what git would ship: the workshop's state, settings and .lab evidence hold secrets and your account ID.
+git ls-files -co --exclude-standard -- "$W" | tar -cf - -T - | tar -xf - -C "$COPIES"   # keeps ../../modules
+(cd "$COPIES/$W" && python3 -m py_compile lab 2> /dev/null) \
   && pass "$W: lab compiles" || flunk "$W: python syntax"
-(cd "$COPIES/w/orders-recovery" && python3 -m unittest discover -s tests > /dev/null 2>&1) \
+(cd "$COPIES/$W" && python3 -m unittest discover -s tests > /dev/null 2>&1) \
   && pass "$W: lab tests" || flunk "$W: lab tests (run: python3 -m unittest discover -s tests, in $W)"
-(cd "$COPIES/w/orders-recovery" && rm -rf .terraform && terraform init -backend=false -input=false -lockfile=readonly > /dev/null 2>&1 && terraform validate -no-color > /dev/null 2>&1) \
+(cd "$COPIES/$W" && rm -rf .terraform && terraform init -backend=false -input=false -lockfile=readonly > /dev/null 2>&1 && terraform validate -no-color > /dev/null 2>&1) \
   && pass "$W: terraform validate" || flunk "$W: terraform validate"
 
 [ "$FAILED" = 0 ] && echo "ALL CHECKS PASS" || { echo "CHECKS FAILED"; exit 1; }

@@ -271,7 +271,8 @@ def cmd_prepare(args):
 
 def cmd_drop(args):
     # No account ID asked, unlike break everything and down: a dropped copy can be restored again from
-    # Clumio's recovery point, and only workshop restores can be dropped, never the live database.
+    # Clumio's recovery point. Only a cluster restored_clusters() recognizes can be dropped (named
+    # orders-db-... or in the workshop's subnet group), never the live database.
     if args.cluster == NAMES["cluster"]:
         stop("that's the live database. ./lab drop only deletes restored clusters")
     if args.cluster not in restored_clusters():
@@ -468,8 +469,9 @@ def confirm_by_account_id(what_goes, confirmed=None):
     if confirmed is None:
         try:
             confirmed = input(f"Type the account ID ({ACCOUNT}) to continue: ").strip()
-        except EOFError:
-            confirmed = ""
+        except EOFError:  # no terminal, as in an agent's shell
+            stop("no one typed the account ID. An agent passes it with --confirm-account, after the person's go. "
+                 "Nothing was deleted")
     if confirmed != ACCOUNT:
         stop("the account ID didn't match. Nothing was deleted")
 
@@ -619,7 +621,7 @@ _secret_arn = None
 def secret_arn():
     global _secret_arn
     if _secret_arn is None:
-        _secret_arn = describe_secret() or stop(f"login secret {NAMES['login_secret']} is missing. Run ./lab check")
+        _secret_arn = describe_secret() or stop(f"login secret {NAMES['login_secret']} is missing. terraform apply creates it, in Module 1")
     return _secret_arn
 
 

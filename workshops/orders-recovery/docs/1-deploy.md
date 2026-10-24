@@ -122,10 +122,10 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
 
 7. Get the archive ready to query. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. In the calendar, choose the archive recovery point: its dot has a ring. Under **SecureVault Archive backup**, choose **Restore**. One of two things happens:
 
-   - **Record restore opens**, with a **Schema browser** that lists the `orders` table. The archive point is new, and hasn't moved to cold storage yet, so it's ready now. This is what the test run saw, 30 minutes after the archive backup.
+   - **Record restore opens**, with a **Schema browser** that lists the `orders` table. The archive recovery point is new, and hasn't moved to cold storage yet, so it's ready now. This is what the test run saw, 30 minutes after the archive backup.
    - **Clumio offers Prepare records for restore.** The point is in cold storage. Choose it now, so the archive is ready when you come back. Preparing can take up to 48 hours. Clumio emails you when it's ready, and you can query it for 7 days.
 
-   ![Clumio Record restore on a fresh archive point: the Schema browser with the orders table and its column types](../images/1-5-record-restore-ready.png)
+   ![Clumio Record restore on a fresh archive recovery point: the Schema browser with the orders table and its column types](../images/1-5-record-restore-ready.png)
 
    This ends session 1. Start Module 2 when the Backtrack tab shows a **Last sync**. The archive can still be preparing: Module 2 says what to do. When you come back, first [start a session](0-setup.md#start-a-session).
 

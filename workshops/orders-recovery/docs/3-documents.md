@@ -2,7 +2,7 @@
 
 **Requires:** [2. Break](2-break.md). In a new terminal, first [start a session](0-setup.md#start-a-session).
 
-The release overwrote 50 documents, but the bucket still exists, and S3 Versioning kept every earlier version. Clumio Backtrack uses those versions to roll a prefix back in place, to a point in time you choose, up to its last daily sync. In this module, you roll the documents back to a point before the release.
+The bad deployment overwrote 50 documents, but the bucket still exists, and S3 Versioning kept every earlier version. Clumio Backtrack uses those versions to roll a prefix back in place, to a point in time you choose, up to its last daily sync. In this module, you roll the documents back to a point before the bad deployment.
 
 **With S3 Versioning alone:** the old versions are kept, but bringing them back means finding the right version of each object and copying it over the current one, object by object, with a script you write during the incident.
 
@@ -10,11 +10,11 @@ The release overwrote 50 documents, but the bucket still exists, and S3 Versioni
 
 2. On the **Backtrack** tab, choose **Backtrack**, then **Roll back**. Select the bucket `orders-documents-<account ID>`.
 
-3. Select the date and time to roll back to. The form says how far it can go: any point up to the last sync. Choose a time before the change time from Module 2, and as close to it as the form allows. In the test run, the last sync was 2 hours before the release, so that sync was the point. A document written between that point and the release would roll back too, to its version at that point. For the object key filter, choose **Object key begins with**, and enter `documents/`.
+3. Select the date and time to roll back to. The form says how far it can go: any point up to the last sync. Choose a time before the change time from Module 2, and as close to it as the form allows. In the test run, the last sync was 2 hours before the bad deployment, so that sync was the point. A document written between that point and the bad deployment would roll back too, to its version at that point. For the object key filter, choose **Object key begins with**, and enter `documents/`.
 
    ![Backtrack Roll back: the date and time, and the object key filter documents/](../images/3-1-backtrack-time.png)
 
-4. Choose **Preview** to see the versions that Backtrack will restore. It lists up to 100 of the objects under `documents/`, at their size from before the release. If it lists none, Backtrack hasn't synced since the documents were loaded: wait for its next daily sync, then try again.
+4. Choose **Preview** to see the versions that Backtrack will restore. It lists up to 100 of the objects under `documents/`, at their size from before the bad deployment. If it lists none, Backtrack hasn't synced since the documents were loaded: wait for its next daily sync, then try again.
 
 5. Choose **Next**. For **Destination**, choose **Source**. It rolls each document back in the same bucket, at the same key, in the same storage class.
 

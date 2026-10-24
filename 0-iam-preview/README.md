@@ -22,7 +22,7 @@ cd 0-iam-preview
 
 Without `--as`, it checks your own login.
 
-**What you should see.** A summary, and a folder `clumio-iam-preview-<region>-<time>` for your security team. The last line is the answer:
+**What you should see.** A summary that ends with the answer, then the folder `clumio-iam-preview-<region>-<time>` for your security team:
 
 - **READY**: the deploy role can create everything. Go to step 1.
 - **BLOCKED**: lists each missing permission. Replace `<ACCOUNT_ID>` in the folder's `policies/deploy-role-policy.json`, grant it to the deploy role, and run step 0 again.

@@ -2,17 +2,7 @@
 
 ## Choose the way back
 
-Start from what happened. Backtrack works in place. Every other way back gives you a new database, objects in a bucket you choose, or rows in a file: check the result, then put it to use.
-
-| What happened | Choose | Why | In this workshop |
-|---|---|---|---|
-| Objects overwritten or deleted, the bucket intact | Backtrack, to a point up to its last daily sync | In place: no new bucket, no change for the application | Module 3 |
-| A few rows deleted or wrong, that existed at the last monthly archive point | Records from an archive recovery point, with SQL, then load them | Only the rows you need, without restoring the whole database | Module 4A |
-| Many rows wrong, or a table damaged | A full restore beside the original, then copy back what you need | Any size, and the live database stays online | Module 4B |
-| A wrong change minutes ago, the account intact | AWS point-in-time recovery, to a new cluster | The fastest way back inside the account | Not run here |
-| The database, the bucket, or their AWS copies deleted | A SecureVault restore. Recreate the bucket first | The copies live outside the account | Module 5 |
-| An account or Region unavailable | A restore into another connected account or Region | No dependency on the source account | Clumio's documentation |
-| You need to look, not recover | SQL on an archive recovery point | No database is restored | Module 4A, step 3 |
+The kit's [Choose the way back](../../../docs/operate.md#choose-the-way-back) matches each kind of incident to its way back. This workshop practices four of them: Backtrack in Module 3, records from the archive in Module 4A, a full restore beside the original in Module 4B, and a SecureVault restore after everything is deleted in Module 5. It also looks without recovering, with SQL on the archive, in Modules 2 and 4A. Point-in-time recovery, and a restore into another account or Region, aren't run here.
 
 ## How data moves
 
@@ -79,7 +69,7 @@ Find the message you see in the first column. Every `STOP` message also says wha
 | The portal says `CAN'T CHECK` | Your AWS sign-in expired, or AWS refused the call | Do what the message says, such as `aws sso login`. Then check the order again. |
 | `terraform apply` stops at `terraform_data.sample_data` | `./lab seed` stopped. Its `STOP` message says why | Fix the cause, then run `terraform apply` again. It continues from there. |
 | `protected by  another policy, through rule …` in `./lab status` | Clumio applies the first rule that matches, and an older, wider rule in your tenant matched `orders-db` first | Set `rds_rule_before_id` in `terraform.tfvars` to the rule ID it shows, then run `terraform apply`. Or ask your Clumio administrator to narrow that rule. |
-| `./lab status` shows `none yet`, or `ready for the incidents  no` | Clumio hasn't taken the first recovery points yet. With the archive on, that includes the first archive point | Wait, then run `./lab status` again. In the Clumio console, check **Activity**, **Tasks**. |
+| `./lab status` shows `none yet`, or `ready for the incidents  no` | Clumio hasn't taken the first recovery points yet. With the archive on, that includes the first archive recovery point | Wait, then run `./lab status` again. In the Clumio console, check **Activity**, **Tasks**. |
 | `STOP: no SecureVault recovery point of …` from `./lab break` | The safety gate: Clumio has no copy to recover from yet | Nothing was changed. Wait until `./lab status` says `ready for the incidents  yes`. |
 | Record restore: error code 111 | The table name in the query is incomplete | Copy it again with the copy icon in **Schema browser**. |
 | `STOP: the CSV lacks …` | The query selected only some columns | Query with `SELECT *`, as in Module 4A, step 3. |
@@ -93,7 +83,3 @@ Find the message you see in the first column. Every `STOP` message also says wha
 | `STOP: … isn't a workshop restore` | `./lab drop` refuses clusters it didn't recognize as restores | Check the name. To delete another cluster, use the Amazon RDS console. |
 | `./lab down` says `STOP` | A delete is still running, or failed | Fix what the message names, then run `./lab down` again. |
 | `terraform destroy` fails with `error_code 367` | Your Clumio tenant doesn't allow deleting AWS connections | Ask your Clumio administrator to delete the connection for this account and Region. Then run `./lab down` again. |
-
-## Glossary
-
-See [Words you'll see](../../../docs/words.md), the one glossary for the whole repo.

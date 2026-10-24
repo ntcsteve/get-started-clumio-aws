@@ -106,7 +106,7 @@ To see Clumio use the key, look in CloudTrail for KMS calls on it by Clumio's us
 
 ## What is proven, and what isn't
 
-Tested live on a Clumio test tenant twice: in September 2026 at commit f257189, and on 2026-10-24 with this version, which calls the shared modules in `modules/`.
+Tested live on a Clumio test tenant twice: in September 2026 at commit f257189, and on 2026-10-24 on a version just before commit bef3aca, which calls the shared modules in `modules/`. bef3aca adds that run's fixes, tested offline only, like every change since.
 
 **Proven:** connecting; protecting S3 (Backtrack, SecureVault Standard) and RDS and Aurora (PITR, SecureVault Standard, Archive); restoring; tearing down; IAM names matching step 0; `iam:TagRole` being required; READY and BLOCKED results; the IAM simulator allowing every action in the generated deploy policy, at the shipped defaults and with a prefix, boundary and tags; step 2 stopping without a connection; a protection rule picking up a newly created tagged database; upgrading steps 1, 2a and 2b from f257189, where the plan shows only moves, and says No changes after one apply; the shared modules connecting an account and protecting a database and a bucket by tag; placing a protection rule before an older, wider one in a shared tenant (`before_rule_id`); and the orders workshop end to end: a Backtrack roll back, a record restore to a CSV, an Aurora restore beside the original, and a full recovery after the database, the bucket and their AWS backups were deleted.
 
