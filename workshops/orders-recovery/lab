@@ -56,8 +56,8 @@ WAIT_LIMIT = f"{WAIT_SECONDS * WAIT_ROUNDS // 60} minutes"
 ROWS_PER_INSERT = 200  # well under the RDS Data API's request size limit
 CSV_SIZE_LIMIT_MB = 1  # a record restore of all 1,000 orders is about 0.2 MB
 EARLIEST_TIME, LATEST_TIME = datetime.datetime(2000, 1, 1), datetime.datetime(2101, 1, 1)  # sample data is from 2026
-# The orders table. To change a column, edit each of these, then run ./check.sh: its OneTableDefinition
-# test fails if the code places disagree.
+# The orders table. To change a column, edit each of these, then run ./check.sh. Its OneTableDefinition
+# test checks that ORDERS_TABLE_SQL, ORDER_COLUMNS, the insert and order_for agree; the rest is on you.
 #   ORDER_COLUMNS and ORDERS_TABLE_SQL (here), order_for (the sample data), insert_parameters,
 #   read_orders_csv's type checks, and is_same_value if the column needs special comparing;
 #   tests/fixtures/record-restore-orders-6-to-10.csv; and every docs "You should see" block
@@ -365,7 +365,7 @@ def cmd_down(args):
     main = describe_cluster(NAMES["cluster"])
     added = [m["DBInstanceIdentifier"] for m in (main["DBClusterMembers"] if main else [])
              if m["DBInstanceIdentifier"] != NAMES["instance"]]
-    running = backups_running()
+    running = backups_running() if is_clumio_connected() else []  # the guard protects the connection; once it's gone, nothing
     if running:  # deleting Clumio's connection now strands the backup and its snapshots (seen live, 2026-10-25)
         stop(f"Clumio is backing up {NAMES['cluster']} (task {', '.join(running)}). Wait until it finishes "
              "(Clumio console, Activity, Tasks), then run ./lab down again. Nothing was deleted")
@@ -403,8 +403,7 @@ def left_behind():
     # Clumio's own temporary copies, left when a backup can't finish. Only named: they aren't the workshop's to delete.
     for snapshot in aws("rds", "describe-db-cluster-snapshots", "--snapshot-type", "manual")["DBClusterSnapshots"]:
         source = snapshot["DBClusterIdentifier"]
-        if snapshot["DBClusterSnapshotIdentifier"].startswith("clumio-airgap-") and (
-                source == NAMES["cluster"] or source.startswith(NAMES["cluster"] + "-")):
+        if snapshot["DBClusterSnapshotIdentifier"].startswith("clumio-airgap-") and NAMES["cluster"] in source:
             left.append(f"Clumio's temporary snapshot {snapshot['DBClusterSnapshotIdentifier']} (delete it in the Amazon RDS console)")
     return left
 

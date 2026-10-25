@@ -1097,13 +1097,27 @@ class DownWaitsForClumio(unittest.TestCase):
         calls = []
         outcome, error = self.stubbed({
             "restored_clusters": lambda: [], "describe_cluster": lambda _c: None,
-            "backups_running": lambda: ["4042118284"],
+            "is_clumio_connected": lambda: True, "backups_running": lambda: ["4042118284"],
             "confirm_by_account_id": lambda *_a, **_k: calls.append("confirm"),
             "delete_cluster": lambda *_a, **_k: calls.append("delete")},
             lambda: lab.cmd_down(argparse.Namespace(confirm_account="123456789012")))
         self.assertEqual((outcome, calls), ("STOP", []))
         self.assertIn("4042118284", error)
         self.assertIn("Nothing was deleted", error)
+
+    def test_without_a_connection_a_stranded_task_cant_lock_down(self):
+        # The guard protects the connection. Once it's gone, a task stuck "in progress" (seen live) must not block.
+        calls = []
+
+        def refuse(_what, confirmed=None):
+            calls.append("confirm")
+            raise SystemExit(1)
+        self.stubbed({
+            "restored_clusters": lambda: [], "describe_cluster": lambda _c: None,
+            "is_clumio_connected": lambda: False, "backups_running": lambda: ["4042118284"],
+            "confirm_by_account_id": refuse},
+            lambda: lab.cmd_down(argparse.Namespace(confirm_account="123456789012")))
+        self.assertEqual(calls, ["confirm"])
 
     def test_running_means_queued_or_in_progress_for_this_database(self):
         paths = []
@@ -1124,13 +1138,15 @@ class DownWaitsForClumio(unittest.TestCase):
     def test_clumios_temporary_snapshots_of_our_database_are_named(self):
         snapshots = {"DBClusterSnapshots": [
             {"DBClusterSnapshotIdentifier": "clumio-airgap-encrypted-t1-org2", "DBClusterIdentifier": "orders-db"},
+            {"DBClusterSnapshotIdentifier": "clumio-airgap-to-encrypt-t3-org2", "DBClusterIdentifier": "restored-orders-db-1792831984188"},
             {"DBClusterSnapshotIdentifier": "clumio-airgap-encrypted-t9-org2", "DBClusterIdentifier": "payments-db"},
             {"DBClusterSnapshotIdentifier": "nightly", "DBClusterIdentifier": "orders-db"}]}
         left, _ = self.stubbed({
             "restored_clusters": lambda: [], "describe_cluster": lambda _c: None, "bucket_exists": lambda: False,
             "describe_secret": lambda: None, "is_clumio_connected": lambda: False, "clumio_items": lambda _p: [],
             "aws": lambda *_a, **_k: snapshots}, lab.left_behind)
-        self.assertEqual(left, ["Clumio's temporary snapshot clumio-airgap-encrypted-t1-org2 (delete it in the Amazon RDS console)"])
+        self.assertEqual(left, ["Clumio's temporary snapshot clumio-airgap-encrypted-t1-org2 (delete it in the Amazon RDS console)",
+                                "Clumio's temporary snapshot clumio-airgap-to-encrypt-t3-org2 (delete it in the Amazon RDS console)"])
 
 
 class Deployment(unittest.TestCase):
@@ -1233,7 +1249,7 @@ class ConfirmAccountWiring(unittest.TestCase):
             calls.append(f"confirm {confirmed}")
             raise SystemExit(1)
         self.stubbed({"restored_clusters": lambda: ["orders-db-restore"], "describe_cluster": lambda _c: None,
-                      "backups_running": lambda: [], "confirm_by_account_id": refuse, "delete_cluster": lambda *_a, **_k: calls.append("delete")},
+                      "is_clumio_connected": lambda: True, "backups_running": lambda: [], "confirm_by_account_id": refuse, "delete_cluster": lambda *_a, **_k: calls.append("delete")},
                      lab.cmd_down, argparse.Namespace(confirm_account="111122223333"))
         self.assertEqual(calls, ["confirm 111122223333"])
 
