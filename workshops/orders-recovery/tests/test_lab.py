@@ -217,120 +217,80 @@ class Scorecard(unittest.TestCase):
 
 
 class RecordRestoreCsv(unittest.TestCase):
-    HEADER = "id,customer,total,status,note,placed_at,document_key,document_sha256\n"
-    ROW = ('10,"Lim Mei Ling 林美玲 #0010",370.50,delivered,"  spaces at both ends  ",2026-01-01 01:10:00.010,'
-           "documents/order-10.json," + "a" * 64 + "\n")
+    """./lab repair --from-csv goes through the kit's tool (tools/record-restore, tested there). Here:
+    the workshop's own promises. Clumio's real file reads back exactly as ./lab seed loaded it, only
+    missing orders are copied, and an order this workshop didn't make stops everything."""
 
-    def read(self, text):
+    COLUMNS = [  # the orders table, as information_schema describes it (seen live)
+        ("id", "int", "NO", None, 10, 0, None), ("customer", "varchar", "NO", 80, None, None, None),
+        ("total", "decimal", "NO", None, 10, 2, None), ("status", "varchar", "NO", 20, None, None, None),
+        ("note", "text", "YES", 65535, None, None, None), ("placed_at", "datetime", "NO", None, None, None, 3),
+        ("document_key", "varchar", "NO", 80, None, None, None), ("document_sha256", "char", "NO", 64, None, None, None)]
+    FIXTURE = os.path.join(HERE, "fixtures", "record-restore-orders-6-to-10.csv")
+
+    def repair(self, path, present=()):
+        inserted = []
+
+        def fake_sql(_arn, statement, parameters=()):
+            values = {p["name"]: list(p["value"].values())[0] for p in parameters}
+            if "information_schema.COLUMNS" in statement:
+                keys = ("name", "type", "nullable", "length", "precision", "scale", "time_digits")
+                return [dict(zip(keys, c)) for c in self.COLUMNS]
+            if "information_schema.KEY_COLUMN_USAGE" in statement:
+                return [{"name": "id"}]
+            return [{"id": v} for v in values.values() if v in present]  # which of these ids are there
+        saved = (lab.sql, lab.aws, lab.secret_arn)
+        lab.sql, lab.secret_arn = fake_sql, (lambda: "arn:secret")
+        lab.aws = lambda *args, **_k: inserted.append(json.loads(args[args.index("--parameter-sets") + 1]))
+        error = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(error):
+                copied = lab.repair_from_csv("arn:cluster", path)
+        except SystemExit:
+            copied = "STOP"
+        finally:
+            lab.sql, lab.aws, lab.secret_arn = saved
+        rows = [{p["name"]: list(p["value"].values())[0] for p in row} for batch in inserted for row in batch]
+        return copied, rows, error.getvalue()
+
+    def test_the_real_clumio_file_copies_back_exactly_what_was_loaded(self):
+        # Downloaded from a live record restore (2026-10-24): every value quoted, NULL as an empty
+        # unquoted field, empty text as "", placed_at in microseconds since 1970 (UTC).
+        copied, rows, _ = self.repair(self.FIXTURE)
+        self.assertEqual(copied, 5)
+        by_id = {r["id"]: dict(r, note=None if r["note"] is True else r["note"]) for r in rows}  # isNull: True is NULL
+        self.assertIsNone(by_id[7]["note"])
+        self.assertEqual(by_id[8]["note"], "")
+        self.assertEqual(lab.compare_rows(by_id), 0)  # every value exactly as ./lab seed loaded it
+
+    def test_only_missing_orders_are_copied(self):
+        copied, rows, _ = self.repair(self.FIXTURE, present=(6, 8, 10))
+        self.assertEqual((copied, sorted(r["id"] for r in rows)), (2, [7, 9]))
+
+    def test_an_order_the_workshop_didnt_make_stops_and_writes_nothing(self):
+        with open(self.FIXTURE, encoding="utf-8") as file:
+            text = file.read().replace('"10","Lim', '"5000","Lim')
         with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8") as file:
             file.write(text)
         try:
-            return lab.read_orders_csv(file.name)
+            copied, rows, error = self.repair(file.name)
         finally:
             os.unlink(file.name)
+        self.assertEqual((copied, rows), ("STOP", []))
+        self.assertIn("an order this workshop didn't make (id 5000)", error)
+        self.assertIn("Nothing was written", error)
 
-    def test_a_good_file_keeps_text_exactly(self):
-        order = self.read(self.HEADER + self.ROW)[0]
-        self.assertEqual((order["id"], order["note"]), ("10", "  spaces at both ends  "))
-        self.assertEqual(order["customer"], "Lim Mei Ling 林美玲 #0010")
-
-    def test_a_newline_inside_a_quoted_note(self):
-        row = self.ROW.replace('"  spaces at both ends  "', '"Leave at the door, ""side gate""\nCall on arrival"')
-        self.assertEqual(self.read(self.HEADER + row)[0]["note"], 'Leave at the door, "side gate"\nCall on arrival')
-
-    def test_iso_times_are_read_into_milliseconds(self):
-        for written in ("2026-01-01T01:10:00.010Z", "2026-01-01 01:10:00.010000", "2026-01-01T09:10:00.010+08:00"):
-            row = self.ROW.replace("2026-01-01 01:10:00.010", written)
-            self.assertEqual(self.read(self.HEADER + row)[0]["placed_at"], "2026-01-01 01:10:00.010", written)
-
-    def test_a_spreadsheet_byte_order_mark(self):
-        self.assertEqual(len(self.read("﻿" + self.HEADER + self.ROW)), 1)
-
-    def test_a_repeated_row_counts_once(self):
-        self.assertEqual(len(self.read(self.HEADER + self.ROW + self.ROW)), 1)
-
-    def test_the_real_clumio_file_gives_back_exactly_what_was_loaded(self):
-        # Downloaded from a live record restore (2026-10-24): every value quoted, NULL as an empty
-        # unquoted field, empty text as "", placed_at in microseconds since 1970 (UTC).
-        orders = lab.read_orders_csv(os.path.join(HERE, "fixtures", "record-restore-orders-6-to-10.csv"))
-        rows = {int(o["id"]): o for o in orders}
-        self.assertEqual(sorted(rows), [6, 7, 8, 9, 10])
-        self.assertIsNone(rows[7]["note"])   # NULL stays NULL
-        self.assertEqual(rows[8]["note"], "")  # empty text stays empty
-        self.assertEqual(rows[9]["note"], 'Leave at the door, "side gate"\nCall on arrival')
-        self.assertEqual(rows[6]["placed_at"], "2026-01-01 00:42:00.006")
-        self.assertEqual(lab.compare_rows(rows), 0)  # every value exactly as ./lab seed loaded it
-
-    def test_unquoted_empty_is_null_and_quoted_empty_is_text(self):
-        null_note = self.ROW.replace('"  spaces at both ends  "', "")
-        empty_note = self.ROW.replace('"  spaces at both ends  "', '""')
-        self.assertIsNone(self.read(self.HEADER + null_note)[0]["note"])
-        self.assertEqual(self.read(self.HEADER + empty_note)[0]["note"], "")
-
-    def test_the_reader_follows_rfc_4180(self):
-        self.assertEqual(lab.csv_records('a,"b,c",\r\n"",d\n'),
-                         [[("a", False), ("b,c", True), ("", False)], [("", True), ("d", False)]])
-        for broken in ('"never closed\n', '"closed"then more\n'):
-            with self.assertRaises(ValueError, msg=broken):
-                lab.csv_records(broken)
-
-    def test_microsecond_times_are_read_into_milliseconds(self):
-        row = self.ROW.replace("2026-01-01 01:10:00.010", '"1767229800010000"')
-        self.assertEqual(self.read(self.HEADER + row)[0]["placed_at"], "2026-01-01 01:10:00.010")
-
-    def test_the_file_boundary_refuses_what_it_cant_trust(self):
-        # Each would otherwise crash with a traceback, or let a guessed value reach the database.
-        short_row = self.ROW.replace(',"  spaces at both ends  "', "", 1)  # one field fewer than the header
-        shape = {  # each must stop for its own reason, not because a later check trips on shifted values
-            "a row with too few fields": (self.HEADER + short_row, "record 2 has 7 fields, the header has 8"),
-            "a row with an extra field": (self.HEADER + self.ROW.replace("\n", ',"extra"\n'), "record 2 has 9 fields, the header has 8"),
-            "a repeated column name": (self.HEADER.replace("\n", ",note\n") + self.ROW.replace("\n", ',""\n'), "names note twice"),
-        }
-        for name, (text, message) in shape.items():
-            error = io.StringIO()
-            with self.subTest(name), contextlib.redirect_stderr(error), self.assertRaises(SystemExit):
-                self.read(text)
-            self.assertIn(message, error.getvalue(), name)
-        cases = {
-            "a time far past year 2100": self.HEADER + self.ROW.replace("2026-01-01 01:10:00.010", "99999999999999999999"),
-            "an ISO time in year 1": self.HEADER + self.ROW.replace("2026-01-01 01:10:00.010", "0001-01-01T00:00:00"),
-            "an ISO time that overflows": self.HEADER + self.ROW.replace("2026-01-01 01:10:00.010", "9999-12-31T23:59:59-01:00"),
-        }
-        for name, text in cases.items():
-            with self.subTest(name), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                self.read(text)
-
-    def test_a_file_that_isnt_utf_8_stops_with_what_to_do(self):
-        with tempfile.NamedTemporaryFile("wb", suffix=".csv", delete=False) as file:
-            file.write((self.HEADER + self.ROW.replace("Lim Mei Ling 林美玲", "Café")).encode("latin-1"))
-        error = io.StringIO()
+    def test_a_bad_value_stops_with_the_tools_reason(self):
+        with open(self.FIXTURE, encoding="utf-8") as file:
+            text = file.read().replace('"1767228540007000"', '"1767228540007"')  # milliseconds, not microseconds
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8") as file:
+            file.write(text)
         try:
-            with contextlib.redirect_stderr(error), self.assertRaises(SystemExit):
-                lab.read_orders_csv(file.name)
+            copied, rows, error = self.repair(file.name)
         finally:
             os.unlink(file.name)
-        self.assertIn("isn't UTF-8", error.getvalue())
-
-    def test_a_file_over_the_size_limit_stops(self):
-        error = io.StringIO()
-        with contextlib.redirect_stderr(error), self.assertRaises(SystemExit):
-            self.read(self.HEADER + self.ROW * 6000)  # about 1.3 MB: far more than 1,000 orders need
-        self.assertIn("MB", error.getvalue())
-
-    def test_an_id_written_with_a_leading_zero_is_the_same_order(self):
-        orders = self.read(self.HEADER + self.ROW + self.ROW.replace("10,", "010,", 1))
-        self.assertEqual([o["id"] for o in orders], ["10"])
-
-    def test_refusals(self):
-        for text in ("id,customer\n10,x\n",                                 # missing columns
-                     self.HEADER + self.ROW.replace("2026-01-01 01:10:00.010", "1767229800010"),  # milliseconds, not microseconds
-                     self.HEADER + self.ROW.replace('"  spaces at both ends  "', '"never closed'),  # a broken quote
-                     self.HEADER + self.ROW.replace("10,", "5000,", 1),      # an order the lab didn't make
-                     self.HEADER + self.ROW.replace("a" * 64, "z" * 64),    # not a checksum
-                     self.HEADER + self.ROW.replace("2026-01-01 01:10:00.010", "yesterday"),  # not a time
-                     self.HEADER):                                           # no rows
-            with self.assertRaises(SystemExit, msg=text), contextlib.redirect_stderr(io.StringIO()):
-                self.read(text)
+        self.assertEqual((copied, rows), ("STOP", []))
+        self.assertIn("row 3, placed_at", error)
 
 
 class SeedGuard(unittest.TestCase):

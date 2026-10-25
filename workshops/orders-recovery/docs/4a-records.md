@@ -38,7 +38,7 @@ Skipped Module 2, step 6, because the archive was still preparing? You can run i
 
    ![The record retrieval task, completed: 100 records, with Download content](../images/4-2-restored-records.png)
 
-5. Load the missing orders back. Drag the CSV from your Downloads folder into the terminal to paste its path. The command checks every row, then copies only the orders that are missing.
+5. Load the missing orders back. Drag the CSV from your Downloads folder into the terminal to paste its path. The command checks every row against the `orders` table's own definition, then copies only the orders that are missing. It uses the kit's [record-restore tool](../../../tools/record-restore/README.md), which works the same way for your own tables.
 
    ```bash
    ./lab repair --from-csv <the CSV file>
@@ -115,12 +115,16 @@ Two things to know before you rely on it in production:
 - **The archive's types aren't the database's.** The Schema browser lists `placed_at` as `bigint`, and the CSV writes it as microseconds since 1970 in UTC. `./lab repair --from-csv` converts it back to `DATETIME(3)`, and checks every row before it writes. Validate against the live schema, never the archive's.
 - **Rows can't repair a structure.** If a deployment drops a column, changes a type or removes an index, the CSV has nowhere to go. Restore the whole database instead, as in 4B or Module 5: it comes back with its schema, and `./lab check` compares that schema the same way. In production, keep the table definitions in versioned migrations, so you can compare a restore with what should be there.
 
-### In production: the same steps in SQL
+### In production: your own tables
+
+For a table of your own in Aurora MySQL, use the kit's [record-restore tool](../../../tools/record-restore/README.md). It reads the table's definition, checks every row of Clumio's CSV against it, and copies only the missing rows: `--check` first, then the copy. No code changes per table.
+
+To do the same by hand, a DBA writes it in SQL:
 
 > [!WARNING]
 > Not run live. The `./lab` path above was proven in the test run. This SQL follows [MySQL's documented behavior](https://dev.mysql.com/doc/refman/8.0/en/load-data.html). Test the `CASE` column in Clumio's record restore, and `LOAD DATA` on Aurora MySQL 3, before you rely on it.
 
-`./lab repair --from-csv` stages the file, checks it, and copies only the missing orders. Without `./lab`, a DBA does the same in four steps: stage, validate, merge, reconcile. Two details decide whether the data comes back exact:
+The tool and `./lab repair --from-csv` stage the file, check it, and copy only the missing rows. In SQL, a DBA does the same in four steps: stage, validate, merge, reconcile. Two details decide whether the data comes back exact:
 
 - **NULL.** MySQL's `LOAD DATA` reads an empty field as empty text, and only `\N` or a bare `NULL` as NULL. Clumio's CSV writes NULL as an empty field, so a plain `LOAD DATA` turns every NULL note into empty text, and `./lab check` reports `orders changed  14 (note: 14)`, BROKEN. Add a column to the record-restore query that says which notes are NULL, and use it when you load.
 - **Times.** The archive writes `placed_at` as microseconds since 1970, in UTC. Set the session to UTC before you convert, or every time shifts by your offset.

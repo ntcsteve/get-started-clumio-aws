@@ -72,7 +72,8 @@ Find the message you see in the first column. Every `STOP` message also says wha
 | `./lab status` shows `none yet`, or `ready for the incidents  no` | Clumio hasn't taken the first recovery points yet. With the archive on, that includes the first archive recovery point | Wait, then run `./lab status` again. In the Clumio console, check **Activity**, **Tasks**. |
 | `STOP: no SecureVault recovery point of …` from `./lab break` | The safety gate: Clumio has no copy to recover from yet | Nothing was changed. Wait until `./lab status` says `ready for the incidents  yes`. |
 | Record restore: error code 111 | The table name in the query is incomplete | Copy it again with the copy icon in **Schema browser**. |
-| `STOP: the CSV lacks …` | The query selected only some columns | Query with `SELECT *`, as in Module 4A, step 3. |
+| `STOP: the CSV lacks …` or `STOP: the CSV has …, which the table lacks` | The query selected other columns than the table has | Query with `SELECT *`, as in Module 4A, step 3. |
+| `STOP: row …, <column>: …` from `./lab repair --from-csv` | A value doesn't fit its column in the `orders` table: not a number, too long, or NULL where it can't be | Download the CSV again from Clumio, and pass it untouched. A spreadsheet re-save changes values. |
 | `STOP: the CSV has an order this workshop didn't make` | Another file, or another table | Download the CSV from this record restore. |
 | The restored records can't be downloaded | Their download window passed | Run the record restore again. |
 | `deployment  from another deployment (…)` or `deployment  missing` in `./lab check` | The restore came from another run's copy of `orders-db`. Clumio keeps old copies under the same name, and every run loads the same data, so only this ID tells them apart | Delete the restored cluster in the Amazon RDS console, then restore again from this deployment's `orders-db`: the one with recovery points from the day `./lab status` shows. |

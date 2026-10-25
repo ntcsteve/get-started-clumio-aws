@@ -13,6 +13,7 @@ This repository sets Clumio up on AWS with Terraform, and teaches recovery with 
 | `README.md` | The spine: the story, the order of the steps, and Before you begin (tools, token, API URL) |
 | `0-iam-preview/` to `2-protect-rds/` | The steps, one folder each. Each sets values in `terraform.tfvars` and calls a module |
 | `modules/` | The logic, once: the connection, S3 protection, RDS and Aurora protection |
+| `tools/record-restore/` | Puts a Clumio record-restore CSV back into any Aurora MySQL table, checked first. Its README has the rules for agents |
 | `workshops/orders-recovery/` | The workshop: Terraform, the `lab` command, and its module pages in `docs/` |
 | `docs/` | The kit's guides: `words.md` (the one glossary), `operate.md`, `clumio-and-aws-backup.md` |
 | `SECURITY.md` | What Clumio can do in an account, and the one record of what is proven live |

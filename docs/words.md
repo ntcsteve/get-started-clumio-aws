@@ -42,7 +42,7 @@ Part of [Get started with Clumio on AWS](../README.md). New to AWS or Clumio? Re
 | Backtrack | Rolls an S3 bucket back in place, to a point in time up to its last daily sync, from the bucket's own object versions. |
 | Restore | Brings data back from a recovery point. For a database, Clumio makes a new cluster or instance with the name you choose: beside the original, or under the original's name once it's gone. |
 | Way back | One way to recover from one kind of incident, such as Backtrack or a full restore. [Choose the way back](operate.md#choose-the-way-back) lists them. |
-| Record restore | SQL on an Archive recovery point. It returns only the rows you ask for, as a CSV file. |
+| Record restore | SQL on an Archive recovery point. It returns only the rows you ask for, as a CSV file. The kit's record-restore tool puts them back into a table. |
 | BYOK | Bring your own key: Clumio encrypts its copies with your AWS KMS key. Optional, and permanent. |
 
 ## This repository

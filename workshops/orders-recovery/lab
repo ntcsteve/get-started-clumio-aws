@@ -44,6 +44,8 @@ import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "tools", "record-restore"))  # the kit's record-restore tool
+import record_restore  # noqa: E402  (after the path it needs)
 EVIDENCE_DIR = os.path.join(HERE, ".lab")
 with open(os.path.join(HERE, "names.json")) as names_file:
     NAMES = json.load(names_file)  # {account} and {region} stay in until load_settings() fills them
@@ -55,11 +57,10 @@ WAIT_SECONDS, WAIT_ROUNDS = 20, 60  # poll every 20 seconds, 60 times at most
 WAIT_LIMIT = f"{WAIT_SECONDS * WAIT_ROUNDS // 60} minutes"
 ROWS_PER_INSERT = 200  # well under the RDS Data API's request size limit
 CSV_SIZE_LIMIT_MB = 1  # a record restore of all 1,000 orders is about 0.2 MB
-EARLIEST_TIME, LATEST_TIME = datetime.datetime(2000, 1, 1), datetime.datetime(2101, 1, 1)  # sample data is from 2026
 # The orders table. To change a column, edit each of these, then run ./check.sh. Its OneTableDefinition
 # test checks that ORDERS_TABLE_SQL, ORDER_COLUMNS, the insert and order_for agree; the rest is on you.
 #   ORDER_COLUMNS and ORDERS_TABLE_SQL (here), order_for (the sample data), insert_parameters,
-#   read_orders_csv's type checks, and is_same_value if the column needs special comparing;
+#   is_same_value if the column needs special comparing (the CSV import reads the table itself);
 #   tests/fixtures/record-restore-orders-6-to-10.csv; and every docs "You should see" block
 #   that prints totals or NULL counts.
 ORDER_COLUMNS = ("id", "customer", "total", "status", "note", "placed_at", "document_key", "document_sha256")
@@ -87,7 +88,7 @@ ACCOUNT, REGION = None, None  # from terraform.tfvars, set by load_settings()
 #   Before an incident            Clumio's recovery points, and when an incident may start
 #   The check                     what ./lab check reads, and HEALTHY or BROKEN
 #   The portal                    one order at a time, in a browser
-#   Record restore                the CSV Clumio returns, checked before use
+#   Record restore                the CSV Clumio returns, through the kit's tool (tools/record-restore)
 #   The scorecard                 from each incident to HEALTHY
 
 # --- Entry point ---------------------------------------------------------------------------------
@@ -268,14 +269,15 @@ def cmd_repair(args):
         return
     if args.csv:
         source_name = os.path.basename(args.csv)
-        rows = [order for order in read_orders_csv(args.csv) if int(order["id"]) in missing]
+        copied = repair_from_csv(live, args.csv)
     else:
         source_name = args.source
         source = queryable_arn(args.source) or stop(f"{args.source} isn't queryable yet. Run ./lab prepare {args.source}")
         rows = sql(source, f"SELECT * FROM orders WHERE id IN ({', '.join(str(i) for i in missing)})")  # ids are ints we made
-    insert_orders(live, rows)
-    record("repair", source=source_name, copied=len(rows))
-    say(f"Copied {len(rows)} of {len(missing)} missing orders from {source_name}. Next: ./lab check")
+        insert_orders(live, rows)
+        copied = len(rows)
+    record("repair", source=source_name, copied=copied)
+    say(f"Copied {copied} of {len(missing)} missing orders from {source_name}. Next: ./lab check")
 
 
 def cmd_prepare(args):
@@ -1430,130 +1432,30 @@ PORTAL_PAGE = """<!doctype html>
 </script></body></html>"""
 
 
-# --- Record restore: the CSV Clumio returns, checked before use ----------------------------------
+# --- Record restore: the CSV Clumio returns, through the kit's tool -----------------------------
 
-def csv_records(text):
-    """The records of a CSV (RFC 4180), each a list of (value, was_quoted). Pure. Python's csv module
-    can't tell an empty unquoted field from a quoted "" before 3.12, and Clumio's record restore
-    writes NULL as the first and empty text as the second (seen live, 2026-10-24). A malformed quote
-    raises ValueError: a guessed value must never reach the database."""
-    records, record, position = [], [], 0
-    while True:
-        if text.startswith('"', position):
-            value, position = read_quoted_field(text, position, len(records) + 1)
-            record.append((value, True))
-        else:
-            end = min([i for i in (text.find(c, position) for c in ",\r\n") if i >= 0] or [len(text)])
-            record.append((text[position:end], False))
-            position = end
-        if text.startswith(",", position):
-            position += 1  # another field follows, possibly empty
-            continue
-        records.append(record)
-        record = []
-        position += 2 if text.startswith("\r\n", position) else 1  # past the line break, or past the end
-        if position >= len(text):
-            return records
+def repair_from_csv(cluster_arn, path):
+    """Copies the missing orders from a Clumio record-restore CSV: the number copied. The kit's tool
+    (tools/record-restore) checks every row against the orders table's own definition first, so
+    nothing is written unless all of it passed."""
+    def query(statement, parameters=()):
+        return sql(cluster_arn, statement, parameters)
 
-
-def read_quoted_field(text, position, record_number):
-    """One quoted field from its opening quote: (its value, the position after it). "" is a quote, and
-    commas and line breaks are data. It must end at a comma, a line break or the end of the file."""
-    parts, position = [], position + 1
-    while True:
-        close = text.find('"', position)
-        if close < 0:
-            raise ValueError(f"a quote in record {record_number} never closes")
-        parts.append(text[position:close])
-        if not text.startswith('""', close):
-            break
-        parts.append('"')
-        position = close + 2
-    position = close + 1
-    if position < len(text) and text[position] not in ",\r\n":
-        raise ValueError(f"text follows a closing quote in record {record_number}")
-    return "".join(parts), position
-
-
-def csv_time(order_id, text):
-    """A time from the CSV in the form the database takes (milliseconds): microseconds since 1970 in
-    UTC (how Clumio's record restore writes a DATETIME, seen live), or ISO 8601 with a T, a Z, an
-    offset or microseconds. Stops, naming the order, if it isn't a time this workshop could hold."""
-    epoch = datetime.datetime(1970, 1, 1)
-    if re.fullmatch(r"[0-9]{1,19}", text):
-        # The range is checked on the number itself, so a huge one can't overflow the conversion.
-        # Seconds or milliseconds, read as microseconds, land in 1970 and are refused here.
-        microseconds = int(text)
-        if not (EARLIEST_TIME - epoch) // datetime.timedelta(microseconds=1) <= microseconds < \
-                (LATEST_TIME - epoch) // datetime.timedelta(microseconds=1):
-            stop(f"order {order_id}: placed_at {text[:30]!r} isn't a time in microseconds since 1970, from 2000 to 2100")
-        moment = epoch + datetime.timedelta(microseconds=microseconds)
-    else:
-        try:
-            moment = datetime.datetime.fromisoformat(text.replace("T", " ").replace("Z", "+00:00"))
-            if moment.tzinfo:
-                moment = moment.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-        except (ValueError, OverflowError):
-            stop(f"order {order_id}: placed_at {text[:30]!r} isn't a time")
-        if not EARLIEST_TIME <= moment < LATEST_TIME:
-            stop(f"order {order_id}: placed_at {text[:30]!r} isn't a time from 2000 to 2100")
-    return moment.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
-
-def read_orders_csv(path):
-    """The orders in a Clumio record-restore CSV, read by column name, so column order doesn't matter.
-    The file comes from outside, so every value is checked before it reaches the database."""
-    if not os.path.isfile(path):
-        stop(f"{path} not found. Drag the downloaded CSV into the terminal to paste its path")
-    size_mb = os.path.getsize(path) / 1_000_000
-    if size_mb > CSV_SIZE_LIMIT_MB:
-        stop(f"{path} is {size_mb:.1f} MB; a record restore of this workshop's orders is about 0.2 MB. Is it the right file?")
+    def insert(statement, parameter_sets):
+        aws("rds-data", "batch-execute-statement", "--resource-arn", cluster_arn, "--secret-arn", secret_arn(),
+            "--database", NAMES["database"], "--sql", statement, "--parameter-sets", json.dumps(parameter_sets))
     try:
-        with open(path, newline="", encoding="utf-8-sig") as file:  # utf-8-sig: a spreadsheet's byte-order mark
-            text = file.read()
-    except UnicodeDecodeError:
-        stop("the CSV isn't UTF-8, the way Clumio writes it. Download it again from Clumio, and don't save it from a spreadsheet")
-    try:
-        records = csv_records(text)
-    except ValueError as error:
-        stop(f"the CSV is malformed: {error}. Download it again from Clumio, and don't save it from a spreadsheet")
-    header = [value for value, _quoted in records[0]] if records else []
-    names = [name.strip().lower() for name in header]
-    repeated = sorted({name for name in names if names.count(name) > 1})
-    if repeated:
-        stop(f"the CSV's header names {', '.join(repeated)} twice. Download it again from Clumio")
-    for number, record in enumerate(records[1:], 2):
-        if record != [("", False)] and len(record) != len(header):  # a blank line is skipped below
-            stop(f"the CSV's record {number} has {len(record)} fields, the header has {len(header)}. "
-                 "Download it again from Clumio")
-    columns = {name: index for index, name in enumerate(names)}
-    # An empty unquoted field is NULL (None); a quoted "" is empty text.
-    rows = [{name: (value if value or quoted else None) for name, (value, quoted) in zip(header, record)}
-            for record in records[1:] if record != [("", False)]]
-    if not rows:
-        stop("the CSV has no rows. Check the query in docs/4a-records.md, step 3")
-    lacking = [c for c in ORDER_COLUMNS if c not in columns]
-    if lacking:
-        stop(f"the CSV lacks {', '.join(lacking)}. Query with SELECT * (docs/4a-records.md, step 3)")
-    orders_by_id = {}
-    for row in rows:
-        # Text stays exactly as exported (spaces and newlines are data), and a NULL note stays NULL.
-        # Every other column is NOT NULL, so a missing value reads as empty and its check below refuses it.
-        order = {c: row.get(header[columns[c]]) for c in ORDER_COLUMNS}
-        for c in ORDER_COLUMNS:
-            if c != "note" and order[c] is None:
-                order[c] = ""
-        for c in ("id", "total", "placed_at", "document_sha256"):
-            order[c] = order[c].strip()
-        if not (re.fullmatch(r"[0-9]{1,4}", order["id"]) and int(order["id"]) in ORDER_IDS
-                and re.fullmatch(r"[0-9a-f]{64}", order["document_sha256"])):
-            stop(f"the CSV has an order this workshop didn't make (id {order['id'][:20]!r}). Is it the right file?")
-        order["id"] = str(int(order["id"]))  # 010 and 10 are the same order
-        if not re.fullmatch(r"-?[0-9]+(\.[0-9]+)?", order["total"]):
-            stop(f"order {order['id']}: total {order['total'][:20]!r} isn't a number")
-        order["placed_at"] = csv_time(order["id"], order["placed_at"])
-        orders_by_id[order["id"]] = order  # one row per order, even if the file repeats one
-    return list(orders_by_id.values())
+        columns, key = record_restore.describe_table(query, "orders")
+        header, rows = record_restore.read_csv(path, CSV_SIZE_LIMIT_MB)
+        # The sample data is from 2026: a time outside these years is a misread, such as milliseconds.
+        orders = record_restore.check_rows(columns, key, header, rows, earliest="2000-01-01", latest="2101-01-01")
+    except record_restore.RestoreError as error:
+        stop(f"{error}. Nothing was written")
+    strangers = [o["id"] for o in orders if o["id"] not in ORDER_IDS]
+    if strangers:
+        stop(f"the CSV has an order this workshop didn't make (id {strangers[0]}). Is it the right file? Nothing was written")
+    copied, _already_there = record_restore.copy_missing(query, insert, "orders", columns, key, orders)  # only the missing
+    return copied
 
 
 # --- The scorecard: from each incident to HEALTHY ------------------------------------------------

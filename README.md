@@ -16,6 +16,7 @@ This repository sets Clumio up on AWS with Terraform, the way a platform team ru
 | Protect real data | [Step 0](0-iam-preview/README.md), then steps 1 and 2 | A deploy role in your account, and a Clumio account |
 | Review what Clumio can do in your account | [SECURITY.md](SECURITY.md), which also lists what's tested live and what isn't | Nothing but time to read it |
 | Run it as a team | [Running it as a team](docs/operate.md#running-it-as-a-team) | Shared state, and someone who reads the alerts |
+| Put rows from a Clumio record restore back into a table | [The record-restore tool](tools/record-restore/README.md) | Python 3, the AWS CLI, and the RDS Data API on the cluster |
 
 No Clumio account yet? Start a [free trial](https://portal.clumio.com/register), or subscribe through [AWS Marketplace](https://aws.amazon.com/marketplace/pp/prodview-hdul2n6jr5dou). The Clumio Region you choose at sign-up can't be changed later.
 

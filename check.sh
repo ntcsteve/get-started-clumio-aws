@@ -9,7 +9,8 @@
 #   4. step 0 golden tests    extract.py still renders exactly what security reviewed
 #   5. module tests           each shared module chooses data, and refuses bad input, as documented (mocks)
 #   6. step 1b key checks     a wrong key, or no permanence yes, stops the plan (mock providers)
-#   7. workshop               its lab compiles, its core logic passes its tests, and its
+#   7. record-restore tool    a Clumio CSV goes back into any table, checked first (fake database)
+#   8. workshop               its lab compiles, its core logic passes its tests, and its
 #                             Terraform validates with its lock file
 set -euo pipefail
 
@@ -50,9 +51,14 @@ cp -R 1b-own-key/tests "$COPIES/1b-own-key/"
 (cd "$COPIES/1b-own-key" && terraform test -no-color > /dev/null 2>&1) \
   && pass "1b-own-key: key checks and permanence gate" || flunk "1b-own-key: terraform test (run it in 1b-own-key to see why)"
 
+T=tools/record-restore
+python3 -m unittest discover -s "$T/tests" > /dev/null 2>&1 \
+  && pass "$T: tests" || flunk "$T: tests (run: python3 -m unittest discover -s $T/tests)"
+
 W=workshops/orders-recovery
 # Only what git would ship: the workshop's state, settings and .lab evidence hold secrets and your account ID.
-git ls-files -co --exclude-standard -- "$W" | tar -cf - -T - | tar -xf - -C "$COPIES"   # keeps ../../modules
+# The tool comes too: lab imports it from ../../tools.
+git ls-files -co --exclude-standard -- "$W" "$T" | tar -cf - -T - | tar -xf - -C "$COPIES"   # keeps ../../modules
 (cd "$COPIES/$W" && python3 -m py_compile lab 2> /dev/null) \
   && pass "$W: lab compiles" || flunk "$W: python syntax"
 (cd "$COPIES/$W" && python3 -m unittest discover -s tests > /dev/null 2>&1) \
