@@ -1043,6 +1043,38 @@ class OnlyWhatTheWorkshopMade(unittest.TestCase):
         self.assertIn("orders-db already exists", error)
 
 
+class DownWaitsForDeletesToShow(unittest.TestCase):
+    """AWS shows a delete with a delay: seen live (2026-10-25), S3 still reported the bucket seconds
+    after terraform destroy removed it. ./lab down re-checks for a bounded time before it stops."""
+
+    def wait(self, answers):
+        calls, slept = [], []
+
+        def left_behind():
+            calls.append(1)
+            return answers[min(len(calls), len(answers)) - 1]
+        saved = (lab.left_behind, lab.time.sleep)
+        lab.left_behind, lab.time.sleep = left_behind, slept.append
+        error = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(error):
+                lab.wait_until_gone()
+            outcome = "gone"
+        except SystemExit:
+            outcome = "STOP"
+        finally:
+            lab.left_behind, lab.time.sleep = saved
+        return outcome, len(calls), error.getvalue()
+
+    def test_a_delete_that_shows_late_is_waited_for(self):
+        self.assertEqual(self.wait([["bucket orders-documents"], []])[:2], ("gone", 2))
+
+    def test_what_stays_is_named_after_a_bounded_wait(self):
+        outcome, calls, error = self.wait([["bucket orders-documents"]])
+        self.assertEqual((outcome, calls), ("STOP", lab.GONE_ROUNDS))
+        self.assertIn("still there: bucket orders-documents", error)
+
+
 class Deployment(unittest.TestCase):
     """Clumio keeps old entries with the same name, and every run loads the same sample data. So a
     restore of another deployment's copy would look HEALTHY. The deployment ID tells them apart."""

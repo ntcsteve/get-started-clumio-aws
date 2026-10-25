@@ -377,6 +377,13 @@ def cmd_down(args):
     # Already confirmed above: a second yes/no here could stop halfway, after the deletes.
     if subprocess.run(["terraform", "destroy", "-auto-approve", "-input=false"], cwd=HERE).returncode != 0:
         stop("terraform destroy didn't finish. Fix the error above, then run ./lab down again")
+    wait_until_gone()
+    record("down")  # a new deployment starts a new evidence log section
+    say("DONE: the workshop is gone. Clumio keeps recovery points it already took until their retention ends")
+
+
+def left_behind():
+    """What the workshop made that still exists, by name, for ./lab down's last check."""
     left = [f"cluster {c}" for c in restored_clusters()]
     if describe_cluster(NAMES["cluster"]):
         left.append(f"cluster {NAMES['cluster']}")
@@ -389,10 +396,21 @@ def cmd_down(args):
     for name in (NAMES["clumio_rds_policy"], NAMES["clumio_s3_policy"]):
         if clumio_items("/policies/definitions?filter=" + clumio_filter({"name": {"$eq": name}})):
             left.append(f"Clumio policy {name}")
-    if left:
-        stop(f"still there: {', '.join(left)}. Run ./lab down again")
-    record("down")  # a new deployment starts a new evidence log section
-    say("DONE: the workshop is gone. Clumio keeps recovery points it already took until their retention ends")
+    return left
+
+
+GONE_ROUNDS = 6  # 2 minutes: S3 can show a deleted bucket for seconds after the delete (seen live, 2026-10-25)
+
+
+def wait_until_gone():
+    """Stops, naming what's left, unless everything is gone within GONE_ROUNDS checks."""
+    for round_number in range(GONE_ROUNDS):
+        left = left_behind()
+        if not left:
+            return
+        if round_number < GONE_ROUNDS - 1:
+            time.sleep(WAIT_SECONDS)
+    stop(f"still there: {', '.join(left)}. Run ./lab down again")
 
 
 # --- Output, failure and evidence ----------------------------------------------------------------

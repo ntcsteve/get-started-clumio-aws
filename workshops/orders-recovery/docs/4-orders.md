@@ -22,7 +22,7 @@ The bad deployment deleted 100 orders. Customers kept ordering since, so rolling
 > [!NOTE]
 > Clumio makes the archive recovery point ready for SQL in its own vault. Nothing is restored into your account.
 
-2. In **Schema browser**, next to the `orders` table, choose the copy icon. It copies the table's full name.
+2. In **Schema browser**, next to the `orders_…` table, not `deployment_…`, choose the copy icon. It copies the table's full name.
 
 3. Enter this query with the name you copied, and choose **Preview first 10 records**. It selects every tenth order: exactly the ones the bad deployment deleted. Without `ORDER BY`, the preview shows them in no set order.
 
@@ -175,11 +175,11 @@ On Aurora, `LOAD DATA FROM S3` loads the file from a bucket instead of your comp
 
 1. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. If more than one is listed, first, at the top of **Inventory**, choose your account in **All accounts** and your Region in **All regions**: other learners on the same Clumio tenant can have one too. Then choose the one that's in AWS, not deleted. A restore with **Default** settings goes to the source's account, so the wrong one would land in someone else's.
 
-2. Choose the last SecureVault Standard recovery point before the change time, then **Restore**. Choose **Default** first, then enter `orders-db-restore` for **Aurora cluster name**. Switching between **Default** and **Custom** clears the name, so check it before you choose **Restore**.
+2. Choose the last SecureVault Standard recovery point before the change time, then **Restore**. Choose **Default** first. Then replace the name Clumio suggests in **Aurora cluster name** with `orders-db-restore`. Switching between **Default** and **Custom** clears the name, so check it before you choose **Restore**.
 
    ![Clumio restore form: Default settings, Aurora cluster name orders-db-restore](../images/4-3-restore-beside.png)
 
-3. To follow the restore, choose **Activity**, **Tasks**. When it completes, `orders-db-restore` appears in the Amazon RDS console. In the test run, it took 19 minutes. If the cluster has another name, such as `restored-orders-db-<number>`, see [Troubleshooting](reference.md#troubleshooting).
+3. To follow the restore, choose **Activity**, **Tasks**. When it completes, `orders-db-restore` appears in the Amazon RDS console. In the test runs, it took 15 to 20 minutes. If the cluster has another name, such as `restored-orders-db-<number>`, see [Troubleshooting](reference.md#troubleshooting).
 
    The restored cluster keeps the original's tags, including `clumio-protection = orders`. So the workshop's policy protects it too, and Clumio starts backing it up at once. The RDS console shows it as **Backing-up** for a while. The steps below still work.
 

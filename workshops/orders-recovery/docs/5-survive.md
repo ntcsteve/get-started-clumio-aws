@@ -11,7 +11,7 @@ Next, the worst case. Anything with enough access to the account can delete the 
 > [!IMPORTANT]
 > You can't undo this. Check that `terraform.tfvars` names your test account.
 
-1. Delete the database with its automated backups, and the bucket with every version. The command lists what it will delete. Enter the account ID to continue.
+1. Delete the database with its automated backups, and the bucket with every version. The command lists what it will delete. Enter the account ID to continue. It takes about 15 minutes, mostly to delete the database's instance.
 
    ```bash
    ./lab break everything
@@ -54,7 +54,7 @@ To bring the application back unchanged, restore the database under its original
 
    ![Clumio, orders-db: Status in AWS Deleted, with its recovery points still on the calendar](../images/5-3-deleted-resource.png)
 
-6. Choose the last SecureVault Standard recovery point before the change time. Then choose **Restore**. Choose **Default** first, then enter `orders-db` for **Aurora cluster name**. Switching between **Default** and **Custom** clears the name, so check it before you choose **Restore**. In the test run, the restore took 20 minutes.
+6. Choose the last SecureVault Standard recovery point before the change time. Then choose **Restore**. Choose **Default** first. Then replace the name Clumio suggests in **Aurora cluster name** with `orders-db`. Switching between **Default** and **Custom** clears the name, so check it before you choose **Restore**. In the test runs, the restore took about 20 minutes.
 
 > [!NOTE]
 > **While you wait:** the source database no longer exists in AWS, but its recovery points do, in Clumio's vault. Clumio copies one into your account as a snapshot, builds `orders-db` from it, then deletes the snapshot.
@@ -87,9 +87,9 @@ A SecureVault restore for S3 writes into a bucket that exists, and that Clumio a
    orders-documents-<account ID>-<region> recreated, empty and tagged for Clumio. Next: wait until Clumio lists it, then restore into it
    ```
 
-9. In the Clumio console, choose **AWS**, **Inventory**, **S3 buckets**. Wait until `orders-documents-<account ID>-<region>` is listed again. This can take up to an hour. In the test run, it took 5 minutes. The deleted bucket stays listed too, with its **Restore** greyed out: its recovery points are on the protection group, the next step.
+9. In the Clumio console, choose **AWS**, **Inventory**, **S3 buckets**. Wait until `orders-documents-<account ID>-<region>` is listed again. This can take up to an hour. In the test runs, it took 1 to 5 minutes. The deleted bucket stays listed too, with its **Restore** greyed out: its recovery points are on the protection group, the next step.
 
-10. Choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>-<region>`. In the calendar, find the latest backup from before the change time. It may be on an earlier date, since the backup runs once a day. A newer backup can be listed too: it's of the empty rebuilt bucket, which the workshop's policy protected at once, because it has the tag. Choose the one from before the change time, then its **Restore** menu, then **Restore prefix/buckets**.
+10. Choose **AWS**, **Protect**, **S3**, **Protection Groups**, then `orders-s3-<account ID>-<region>`. Above the calendar, choose **All buckets**: the deleted bucket's backups show only then. In the calendar, find the latest backup from before the change time. It may be on an earlier date, since the backup runs once a day. A newer backup can be listed too: it's of the empty rebuilt bucket, which the workshop's policy protected at once, because it has the tag. Choose the one from before the change time, then its **Restore** menu, then **Restore prefix/buckets**. The next screen's heading names the time, as **Selected backup: <date>, <time>**: check it there, because the last screen shows only the date.
 
     ![Clumio protection group orders-s3: two backups on one day, of the empty rebuilt bucket at 08:05 pm and of the documents at 02:35 pm](../images/extra-5-protection-group-points.png)
 

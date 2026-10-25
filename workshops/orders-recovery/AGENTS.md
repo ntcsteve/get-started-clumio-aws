@@ -15,6 +15,7 @@ You help a person run this workshop in their test AWS account. You run the `./la
 ## How to read a result
 
 - A line starting with `STOP:` (on stderr, exit code 1) means the command stopped. Read what it already did, in the lines above. The message names what to fix. Tell the person, then look it up in `docs/reference.md`, "Troubleshooting". Never retry a deletion in a loop.
+- A Clumio task ID can arrive before the task is done. Before you check the data, confirm the task completed, in the Clumio console or with `GET /tasks/<task ID>` on the Clumio API.
 - `./lab check` ends with `HEALTHY` (exit code 0) or `BROKEN` (exit code 1). After an incident, `BROKEN` is the expected result, not an error.
 - Clumio takes time. Its first recovery points can take hours, Backtrack's first sync and the archive's preparation up to 48 hours each. A rebuilt bucket can take an hour to appear in Clumio. While you wait, run `./lab status` at most every 15 minutes, and tell the person what you're waiting for.
 

@@ -100,7 +100,7 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
 
    The first line names this deployment, by an ID that `./lab seed` wrote into the database. After a restore, `./lab check` uses it to confirm the copy is this deployment's.
 
-   **You should see** `ready for the incidents  yes` on the last line. If it says `no`, it names what's missing: wait, and run the command again later. In the test run, the documents' first recovery point was there within 3 minutes, and both of the database's within 25 minutes of its policy taking effect.
+   **You should see** `ready for the incidents  yes` on the last line. If it says `no`, it names what's missing: wait, and run the command again later. In the test run, the documents' first recovery point was there within 3 minutes, and both of the database's within 40 minutes of its policy taking effect: the archive point took 13 minutes in one run, 33 in another.
 
    ```text
      deployment               7f3a9c21, seeded 2026-10-24 06:32 UTC
@@ -125,7 +125,7 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
 
 7. Get the archive ready to query. In the Clumio console, choose **AWS**, **Inventory**, **RDS resources**, then `orders-db`. In the calendar, choose the archive recovery point: its dot has a ring. Under **SecureVault Archive backup**, choose **Restore**. One of two things happens:
 
-   - **Record restore opens**, with a **Schema browser** that lists the `orders` table. The archive recovery point is new, and hasn't moved to cold storage yet, so it's ready now. This is what the test run saw, 30 minutes after the archive backup.
+   - **Record restore opens**, with a **Schema browser** that lists the `orders` table, and a small `deployment` table that `./lab seed` added. The archive recovery point is new, and hasn't moved to cold storage yet, so it's ready now. This is what the test run saw, 30 minutes after the archive backup.
    - **Clumio offers Prepare records for restore.** The point is in cold storage. Choose it now, so the archive is ready when you come back. Preparing can take up to 48 hours. Clumio emails you when it's ready, and you can query it for 7 days.
 
    ![Clumio Record restore on a fresh archive recovery point: the Schema browser with the orders table and its column types](../images/1-5-record-restore-ready.png)
