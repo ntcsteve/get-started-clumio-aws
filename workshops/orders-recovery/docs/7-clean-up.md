@@ -4,7 +4,7 @@
 
 To stop AWS charges, delete everything the workshop created. One command does it, and then checks that nothing is left.
 
-1. Stop the portal: in its terminal, press Ctrl-C. Then run the clean-up command. It lists what it will delete: any restored clusters, any instance added after Terraform built the database, and everything Terraform built. Read the list, then enter the account ID. It deletes the restored clusters, then runs `terraform destroy` without asking again.
+1. Stop the portal: in its terminal, press Ctrl-C. Then run the clean-up command. It lists what it will delete: any restored clusters, any instance added after Terraform built the database, and everything Terraform built. Read the list, then enter the account ID. It deletes the restored clusters, then runs `terraform destroy` without asking again. If Clumio is still backing up the database, as it is in the first hour after a deploy, it says so and deletes nothing: wait, then run it again.
 
    ```bash
    ./lab down

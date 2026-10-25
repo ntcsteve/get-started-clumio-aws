@@ -365,6 +365,10 @@ def cmd_down(args):
     main = describe_cluster(NAMES["cluster"])
     added = [m["DBInstanceIdentifier"] for m in (main["DBClusterMembers"] if main else [])
              if m["DBInstanceIdentifier"] != NAMES["instance"]]
+    running = backups_running()
+    if running:  # deleting Clumio's connection now strands the backup and its snapshots (seen live, 2026-10-25)
+        stop(f"Clumio is backing up {NAMES['cluster']} (task {', '.join(running)}). Wait until it finishes "
+             "(Clumio console, Activity, Tasks), then run ./lab down again. Nothing was deleted")
     confirm_by_account_id([f"restored cluster {c}" for c in restored]
                           + [f"instance {i} in {NAMES['cluster']}, added after Terraform built it" for i in added]
                           + ["everything Terraform built: the database, the documents bucket and every version, "
@@ -396,6 +400,12 @@ def left_behind():
     for name in (NAMES["clumio_rds_policy"], NAMES["clumio_s3_policy"]):
         if clumio_items("/policies/definitions?filter=" + clumio_filter({"name": {"$eq": name}})):
             left.append(f"Clumio policy {name}")
+    # Clumio's own temporary copies, left when a backup can't finish. Only named: they aren't the workshop's to delete.
+    for snapshot in aws("rds", "describe-db-cluster-snapshots", "--snapshot-type", "manual")["DBClusterSnapshots"]:
+        source = snapshot["DBClusterIdentifier"]
+        if snapshot["DBClusterSnapshotIdentifier"].startswith("clumio-airgap-") and (
+                source == NAMES["cluster"] or source.startswith(NAMES["cluster"] + "-")):
+            left.append(f"Clumio's temporary snapshot {snapshot['DBClusterSnapshotIdentifier']} (delete it in the Amazon RDS console)")
     return left
 
 
@@ -858,6 +868,16 @@ def database_in_clumio():
     resources = clumio_items("/datasources/aws/rds-resources?limit=100&filter=" + clumio_filter(
         {"account_native_id": {"$eq": ACCOUNT}, "name": {"$contains": NAMES["cluster"]}}))
     return next((r for r in resources if r.get("name") == NAMES["cluster"] and not r.get("is_deleted")), None)
+
+
+def backups_running():
+    """The IDs of Clumio tasks still queued or running for orders-db: none when Clumio doesn't list it.
+    Filtered by the database only: with status in the filter, Clumio answers HTTP 504 (seen live)."""
+    database = database_in_clumio()
+    if database is None:
+        return []
+    tasks = clumio_items("/tasks?filter=" + clumio_filter({"primary_entity.id": {"$eq": database["id"]}}))
+    return [t["id"] for t in tasks if t.get("status") in ("queued", "in_progress")]
 
 
 def our_rds_policy_id():

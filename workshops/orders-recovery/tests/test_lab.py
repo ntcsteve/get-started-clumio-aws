@@ -1075,6 +1075,64 @@ class DownWaitsForDeletesToShow(unittest.TestCase):
         self.assertIn("still there: bucket orders-documents", error)
 
 
+class DownWaitsForClumio(unittest.TestCase):
+    """./lab down deletes Clumio's connection. Mid-backup, that strands the backup and its temporary
+    snapshots in the account (seen live, 2026-10-25), so down refuses until Clumio is done."""
+
+    def stubbed(self, stubs, call):
+        saved = {name: getattr(lab, name) for name in stubs}
+        for name, stub in stubs.items():
+            setattr(lab, name, stub)
+        error = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(error):
+                return call(), error.getvalue()
+        except SystemExit:
+            return "STOP", error.getvalue()
+        finally:
+            for name, original in saved.items():
+                setattr(lab, name, original)
+
+    def test_down_refuses_before_deleting_while_a_backup_runs(self):
+        calls = []
+        outcome, error = self.stubbed({
+            "restored_clusters": lambda: [], "describe_cluster": lambda _c: None,
+            "backups_running": lambda: ["4042118284"],
+            "confirm_by_account_id": lambda *_a, **_k: calls.append("confirm"),
+            "delete_cluster": lambda *_a, **_k: calls.append("delete")},
+            lambda: lab.cmd_down(argparse.Namespace(confirm_account="123456789012")))
+        self.assertEqual((outcome, calls), ("STOP", []))
+        self.assertIn("4042118284", error)
+        self.assertIn("Nothing was deleted", error)
+
+    def test_running_means_queued_or_in_progress_for_this_database(self):
+        paths = []
+
+        def tasks(path):
+            paths.append(path)
+            return [{"id": "1", "status": "in_progress"}, {"id": "2", "status": "queued"},
+                    {"id": "3", "status": "completed"}, {"id": "4", "status": "failed"}]
+        found, _ = self.stubbed({"database_in_clumio": lambda: {"id": "db-1"}, "clumio_items": tasks}, lab.backups_running)
+        self.assertEqual(found, ["1", "2"])
+        self.assertIn("primary_entity.id", paths[0])
+        self.assertNotIn("status", paths[0])  # Clumio answers 504 when status is in the filter (seen live)
+
+    def test_nothing_runs_when_clumio_has_no_database(self):
+        found, _ = self.stubbed({"database_in_clumio": lambda: None}, lab.backups_running)
+        self.assertEqual(found, [])
+
+    def test_clumios_temporary_snapshots_of_our_database_are_named(self):
+        snapshots = {"DBClusterSnapshots": [
+            {"DBClusterSnapshotIdentifier": "clumio-airgap-encrypted-t1-org2", "DBClusterIdentifier": "orders-db"},
+            {"DBClusterSnapshotIdentifier": "clumio-airgap-encrypted-t9-org2", "DBClusterIdentifier": "payments-db"},
+            {"DBClusterSnapshotIdentifier": "nightly", "DBClusterIdentifier": "orders-db"}]}
+        left, _ = self.stubbed({
+            "restored_clusters": lambda: [], "describe_cluster": lambda _c: None, "bucket_exists": lambda: False,
+            "describe_secret": lambda: None, "is_clumio_connected": lambda: False, "clumio_items": lambda _p: [],
+            "aws": lambda *_a, **_k: snapshots}, lab.left_behind)
+        self.assertEqual(left, ["Clumio's temporary snapshot clumio-airgap-encrypted-t1-org2 (delete it in the Amazon RDS console)"])
+
+
 class Deployment(unittest.TestCase):
     """Clumio keeps old entries with the same name, and every run loads the same sample data. So a
     restore of another deployment's copy would look HEALTHY. The deployment ID tells them apart."""
@@ -1175,7 +1233,7 @@ class ConfirmAccountWiring(unittest.TestCase):
             calls.append(f"confirm {confirmed}")
             raise SystemExit(1)
         self.stubbed({"restored_clusters": lambda: ["orders-db-restore"], "describe_cluster": lambda _c: None,
-                      "confirm_by_account_id": refuse, "delete_cluster": lambda *_a, **_k: calls.append("delete")},
+                      "backups_running": lambda: [], "confirm_by_account_id": refuse, "delete_cluster": lambda *_a, **_k: calls.append("delete")},
                      lab.cmd_down, argparse.Namespace(confirm_account="111122223333"))
         self.assertEqual(calls, ["confirm 111122223333"])
 
