@@ -73,7 +73,7 @@ The logic lives once, in `modules/`. Each step folder only sets your values and 
 You need:
 
 1. Terraform 1.5 or later, Python 3 and the AWS CLI.
-2. For steps 0 and 1, an AWS sign-in to the account you're connecting. Step 2 needs none.
+2. For steps 0, 1 and 1b, an AWS sign-in to the account you're connecting. Step 2 needs none.
 3. A Clumio API token, from the Clumio console under Administration, Access management, API tokens.
 
 Set your Clumio details as environment variables, so the token never lands in a file:
@@ -96,7 +96,7 @@ Your API URL, and your Clumio Region, follow from the portal you sign in to. The
 
 In each step folder you use, create your settings from the example: `cp terraform.tfvars.example terraform.tfvars`. Your copy stays out of git, so an update never conflicts with it.
 
-Every step's `terraform.tfvars` names the same `account_id` and `region`. Steps 0 and 1 refuse to run when you're signed in to any other account. Step 2 stops if Clumio has no connection for them.
+Every step's `terraform.tfvars` names the same `account_id` and `region`; step 1b names your Clumio Region instead, as `clumio_region`. Steps 0, 1 and 1b refuse to run when you're signed in to any other account. Step 2 stops if Clumio has no connection for them.
 
 Then start with [step 0](0-iam-preview/README.md).
 

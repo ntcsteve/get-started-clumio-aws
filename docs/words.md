@@ -49,7 +49,7 @@ Part of [Get started with Clumio on AWS](../README.md). New to AWS or Clumio? Re
 
 | Word | Meaning |
 |---|---|
-| Step | One folder of the kit, such as `1-connect-clumio`. You run them in order. |
+| Step | One folder of the kit, such as `1-connect-clumio`. Steps 0 and 1 come first; 1b is optional; 2a and 2b run in any order. |
 | Deploy role | The AWS identity that runs step 1 and creates Clumio's IAM roles. |
 | `terraform.tfvars` | Your settings for a step. You copy it from `terraform.tfvars.example`. |
 | `./lab` | The workshop's command. Every command checks first, and says what to do next. |

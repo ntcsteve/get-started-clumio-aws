@@ -13,6 +13,8 @@ The bad deployment deleted 100 orders. Customers kept ordering since, so rolling
 
 ## 4A. Records from the archive
 
+Skipped Module 2, step 6, because the archive was still preparing? You can run its two queries now, before step 3, to see what was there before the bad deployment.
+
 **Requires:** the archive recovery point from [Module 1, step 7](1-deploy.md#wait-for-the-first-recovery-points), ready to query. It was taken before the bad deployment, so it holds every order the bad deployment deleted.
 
 1. Open **Record restore**: from Clumio's email, or in the Clumio console under **AWS**, **Inventory**, **RDS resources**, `orders-db`, by choosing **Restore** on that archive recovery point. If Clumio lists more than one `orders-db`, first, at the top of **Inventory**, choose your account in **All accounts** and your Region in **All regions**.
@@ -210,7 +212,7 @@ On Aurora, `LOAD DATA FROM S3` loads the file from a bucket instead of your comp
    No orders are missing. Nothing to copy
    ```
 
-   With wide damage, this is the step that copies them back.
+   With wide damage, this is the step that copies them back. Skipped 4A? Then you see `Copied 100 of 100 missing orders from orders-db-restore` instead. Run [Check the application](#check-the-application) before you go on.
 
 6. Delete the restored cluster. It has done its job, and it runs an instance.
 

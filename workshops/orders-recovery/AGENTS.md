@@ -37,7 +37,7 @@ You help a person run this workshop in their test AWS account. You run the `./la
 | 4A | Person | Record restore in the Clumio console. Gives you the CSV's path | The path of a `.csv` file |
 | 4A | You | `./lab repair --from-csv <path>`, then `./lab check` | `Copied 100 of 100`, then `HEALTHY` |
 | 4B | Person | Restores `orders-db-restore` in the Clumio console | The person gives you the task ID |
-| 4B | You | `./lab prepare orders-db-restore`, then `./lab repair --from orders-db-restore` | `answers SQL`, then `No orders are missing` |
+| 4B | You | `./lab prepare orders-db-restore`, then `./lab repair --from orders-db-restore` | `answers SQL`, then `No orders are missing`. If 4A was skipped: `Copied 100 of 100`, then run `./lab check`: `HEALTHY` |
 | 4B | You, with the person's go | `./lab drop orders-db-restore` | `orders-db-restore deleted` |
 | 5 | You, with the person's go | `./lab break everything --confirm-account <account ID>`, then `./lab check` | `Everything is gone`, then `BROKEN` |
 | 5 | Person | Restores the database as `orders-db` in the Clumio console | The person gives you the task ID |

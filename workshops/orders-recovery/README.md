@@ -92,9 +92,9 @@ Regulated teams: to have Clumio encrypt its copies with your own AWS KMS key, se
 
 ## Key concepts
 
-**Four ways back.** Each fits a different incident.
+**Where Clumio keeps each copy.** Each fits a different incident. [Choose the way back](../../docs/operate.md#choose-the-way-back) turns these into the ways back, by incident.
 
-| Way back | Where the copy lives | Use it for |
+| Copy | Where it lives | Use it for |
 |---|---|---|
 | Backtrack | The object versions in your S3 bucket. Clumio rolls a prefix back in place, to a point up to its last daily sync. | Documents overwritten or deleted, while the bucket exists |
 | SecureVault Standard, S3 | Clumio's air-gapped vault | Documents lost with the bucket |
