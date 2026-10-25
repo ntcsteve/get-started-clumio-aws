@@ -23,11 +23,30 @@ New to AWS or Clumio? Keep [Words you'll see](../../docs/words.md) open beside t
 |---|---|
 | **Audience** | Cloud and platform engineers, and team leads |
 | **Level** | Beginner. You type commands in a terminal, and each module gives every command |
-| **Time** | Two sessions. Between them, Backtrack's first sync can take up to 48 hours |
+| **Time** | Two sessions, up to 48 hours apart. See [Before you start](#before-you-start) |
 | **Cost** | One Aurora `db.r6g.large` instance while the workshop runs, and Clumio for what it protects. See [Cost](#cost) |
 | **AWS services** | Amazon Aurora with the RDS Data API, Amazon S3, AWS Secrets Manager |
 | **Clumio features** | SecureVault Standard and Archive, Backtrack, record restore, and protection as code |
 | **Status** | See [what is proven, and what isn't](../../SECURITY.md#what-is-proven-and-what-isnt) |
+
+## Before you start
+
+You need:
+
+- A test AWS account where you can create IAM roles, Aurora, and Amazon S3 resources. The account must not be connected to Clumio already in the Region you use.
+- A Clumio user who can create an API token. No Clumio account yet? Start a [free trial](https://portal.clumio.com/register).
+- A Clumio tenant that allows deleting AWS connections. Ask your Clumio administrator. Without it, clean-up can't remove the workshop's connection.
+- An AWS Region that [Clumio supports](https://documentation.commvault.com/clumio/supported_regions.html).
+
+**Plan for two sessions.** Session 1 builds and protects the application. Session 2 runs the incidents. Between them, Backtrack's first sync can take up to 48 hours.
+
+**The archive may need preparing before you can query it,** which can take up to 48 hours. A new archive recovery point opens at once. Once it has moved to cold storage, you prepare it at the end of Module 1, so it's ready by the second session.
+
+Regulated teams: to have Clumio encrypt its copies with your own AWS KMS key, see [step 1b of the kit](../../1b-own-key/README.md). It's permanent, so it isn't part of this workshop.
+
+## Cost
+
+The workshop runs one Aurora `db.r6g.large` instance. Module 4B adds a restored cluster with its own instance until you delete it. The bucket and the network cost little. Clumio charges for what it protects. [Clean up](docs/7-clean-up.md) stops the AWS charges. Recovery points that Clumio already took stay until their retention ends: 7 days for the database, 30 days for the documents, and 1 month for the archive. That's the shortest Clumio allows; Clumio charges an early-deletion fee for archive recovery points kept under 12 months.
 
 ## What is Clumio
 
@@ -61,35 +80,6 @@ flowchart LR
 
 One `terraform apply` builds the application, loads its data, and then turns on its protection. Clumio finds the database and the bucket by their tag, `clumio-protection = orders`.
 
-## Modules
-
-| Module | You learn to |
-|---|---|
-| [0. Set up](docs/0-setup.md) | Install the tools, sign in, and check that the account is ready |
-| [1. Deploy and protect](docs/1-deploy.md) | Deploy the application with its data and its protection, in one apply |
-| [2. Break](docs/2-break.md) | Ship AnyCompany's Friday deployment, and measure what it did |
-| [3. Recover the documents](docs/3-documents.md) | Roll documents back in place with Backtrack |
-| [4. Recover the orders](docs/4-orders.md) | Choose by the size of the damage: records with SQL, or a whole database |
-| [5. Survive](docs/5-survive.md) | Recover after the database, the bucket, and their AWS backups are deleted |
-| [6. Prove](docs/6-prove.md) | Read your scorecard, with Clumio's task records |
-| [7. Clean up](docs/7-clean-up.md) | Delete the workshop, then take the next step on your own data |
-| [Reference](docs/reference.md) | Which way back this workshop practices, how data moves, commands, troubleshooting |
-
-## Before you start
-
-You need:
-
-- A test AWS account where you can create IAM roles, Aurora, and Amazon S3 resources. The account must not be connected to Clumio already in the Region you use.
-- A Clumio user who can create an API token. No Clumio account yet? Start a [free trial](https://portal.clumio.com/register).
-- A Clumio tenant that allows deleting AWS connections. Ask your Clumio administrator. Without it, clean-up can't remove the workshop's connection.
-- An AWS Region that [Clumio supports](https://documentation.commvault.com/clumio/supported_regions.html).
-
-**Plan for two sessions.** Session 1 builds and protects the application. Session 2 runs the incidents.
-
-**The archive may need preparing before you can query it,** which can take up to 48 hours. A new archive recovery point opens at once. Once it has moved to cold storage, you prepare it at the end of Module 1, so it's ready by the second session.
-
-Regulated teams: to have Clumio encrypt its copies with your own AWS KMS key, see [step 1b of the kit](../../1b-own-key/README.md). It's permanent, so it isn't part of this workshop.
-
 ## Key concepts
 
 **Where Clumio keeps each copy.** Each fits a different incident. [Choose the way back](../../docs/operate.md#choose-the-way-back) turns these into the ways back, by incident.
@@ -111,9 +101,22 @@ Aurora's own point-in-time recovery also runs in your account, kept for 7 days b
 
 Clumio can also restore into another connected account or Region, for an outage or a fresh test environment. During a real incident, start from [Choose the way back](../../docs/operate.md#choose-the-way-back).
 
-## Cost
+## Modules
 
-The workshop runs one Aurora `db.r6g.large` instance. Module 4B adds a restored cluster with its own instance until you delete it. The bucket and the network cost little. Clumio charges for what it protects. [Clean up](docs/7-clean-up.md) stops the AWS charges. Recovery points that Clumio already took stay until their retention ends: 7 days for the database, 30 days for the documents, and 1 month for the archive. That's the shortest Clumio allows; Clumio charges an early-deletion fee for archive recovery points kept under 12 months.
+| Module | You learn to |
+|---|---|
+| [0. Set up](docs/0-setup.md) | Install the tools, sign in, and check that the account is ready |
+| [1. Deploy and protect](docs/1-deploy.md) | Deploy the application with its data and its protection, in one apply |
+| [2. Break](docs/2-break.md) | Ship AnyCompany's Friday deployment, and measure what it did |
+| [3. Recover the documents](docs/3-documents.md) | Roll documents back in place with Backtrack |
+| [4A. Recover the orders from the archive](docs/4a-records.md) | Bring back only the lost rows, with SQL on the archive, then prove the schema and every value |
+| [4B. Recover the whole database](docs/4b-database.md) | Restore the whole database beside the live one, for damage of any size |
+| [5. Survive](docs/5-survive.md) | Recover after the database, the bucket, and their AWS backups are deleted |
+| [6. Prove](docs/6-prove.md) | Read your scorecard, with Clumio's task records |
+| [7. Clean up](docs/7-clean-up.md) | Delete the workshop, then take the next step on your own data |
+| [Reference](docs/reference.md) | Which way back this workshop practices, how data moves, commands, troubleshooting |
+
+Start with [0. Set up](docs/0-setup.md).
 
 ## What's in this folder
 
@@ -128,5 +131,3 @@ The workshop runs one Aurora `db.r6g.large` instance. Module 4B adds a restored 
 | `AGENTS.md` | For an AI agent that runs the commands: the safety rules, and the run in order |
 
 The Clumio policies come from this repo's `modules/`, the same modules its production steps use.
-
-Start with [0. Set up](docs/0-setup.md).

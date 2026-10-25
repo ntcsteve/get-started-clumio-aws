@@ -1,6 +1,6 @@
 # 5. Survive
 
-**Requires:** [4. Recover the orders](4-orders.md). In a new terminal, first [start a session](0-setup.md#start-a-session).
+**Requires:** [4B. Recover the whole database](4b-database.md). In a new terminal, first [start a session](0-setup.md#start-a-session).
 
 Next, the worst case. Anything with enough access to the account can delete the database and the bucket, and with them the copies kept in the account: the automated backups and every object version. In this module, you delete all of it, then recover from Clumio's air-gapped recovery points, kept outside your organization's security domain.
 

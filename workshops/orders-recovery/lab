@@ -1531,10 +1531,10 @@ def read_orders_csv(path):
     rows = [{name: (value if value or quoted else None) for name, (value, quoted) in zip(header, record)}
             for record in records[1:] if record != [("", False)]]
     if not rows:
-        stop("the CSV has no rows. Check the query in docs/4-orders.md, step 4A")
+        stop("the CSV has no rows. Check the query in docs/4a-records.md, step 3")
     lacking = [c for c in ORDER_COLUMNS if c not in columns]
     if lacking:
-        stop(f"the CSV lacks {', '.join(lacking)}. Query with SELECT * (docs/4-orders.md, step 4A)")
+        stop(f"the CSV lacks {', '.join(lacking)}. Query with SELECT * (docs/4a-records.md, step 3)")
     orders_by_id = {}
     for row in rows:
         # Text stays exactly as exported (spaces and newlines are data), and a NULL note stays NULL.

@@ -49,7 +49,7 @@ Friday, 17:00. AnyCompany's deployment includes a database migration with a wron
 
    ![The orders portal: order 10 is missing, while the page loads](../images/2-1-portal-order-missing.png)
 
-6. If the archive is still preparing (Module 1, step 7), skip this step, and do it at the start of Module 4. Otherwise, ask the archive what was there before the bad deployment, with nothing restored. Open **Record restore** on the archive recovery point from Module 1. In **Schema browser**, next to the `orders_…` table, not `deployment_…`, choose the copy icon. It copies the table's full name, in the form `<database>.<table>`. Then enter this with the name you copied, and choose **Preview first 10 records**:
+6. If the archive is still preparing (Module 1, step 7), skip this step, and do it at the start of Module 4A. Otherwise, ask the archive what was there before the bad deployment, with nothing restored. Open **Record restore** on the archive recovery point from Module 1. In **Schema browser**, next to the `orders_…` table, not `deployment_…`, choose the copy icon. It copies the table's full name, in the form `<database>.<table>`. Then enter this with the name you copied, and choose **Preview first 10 records**:
 
    ```sql
    SELECT COUNT(*) AS orders, SUM(total) AS total FROM <orders table>
