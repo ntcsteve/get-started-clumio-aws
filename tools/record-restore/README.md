@@ -77,7 +77,11 @@ Other types, such as `json`, `blob`, `enum` or `datetime(6)`, stop with the type
 
 ## Not covered
 
-Aurora PostgreSQL, other databases, and tables without a primary key. The SQL is mostly standard, so PostgreSQL is a small step, but it isn't built or tested.
+Aurora PostgreSQL, other databases, and tables without a primary key. PostgreSQL would need its own SQL for quoting names, reading the table's definition, strict values and the time zone, and its own type names. It isn't built or tested.
+
+Tables with generated columns aren't covered either: the copy includes every column, MySQL refuses a value for a generated one, and nothing is written.
+
+What a live run proved, and what it didn't, is in [SECURITY.md](../../SECURITY.md#what-is-proven-and-what-isnt).
 
 ## For AI agents
 
