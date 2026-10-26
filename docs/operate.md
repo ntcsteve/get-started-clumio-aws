@@ -54,6 +54,7 @@ See [step 1, Disconnect](../1-connect-clumio/README.md#disconnect). Step 1 block
 | A first backup stays queued | Contact Clumio support with the task ID from Tasks. |
 | *error_code 320 ... already exists* | An apply was cut off. Run `terraform import <address> <ID from the Clumio console>`, then apply. |
 | *error_code 111*, from step 2a's apply | Use one SecureVault tier per S3 backup policy. |
+| *error_code 107 ... Number of rules is limited to 25*, from step 2b's apply | Your tenant has as many protection rules as Clumio allows. Remove a rule you no longer need, or ask your Clumio administrator, then apply again. |
 | *Instance cannot be destroyed* | Step 1 protects the connection. See [Disconnect](../1-connect-clumio/README.md#disconnect). |
 | *error_code 367* | Your tenant can't delete connections. Keep it, or ask Clumio support. |
 | Plan still shows changes after two applies | Save the plan output and contact Clumio support. |
