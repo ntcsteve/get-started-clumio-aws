@@ -1451,7 +1451,7 @@ def repair_from_csv(cluster_arn, path):
                                               "Is it the right file?")
         copied, _already_there = record_restore.copy_missing(db, "orders", columns, key, orders)  # only the missing
     except record_restore.RestoreError as error:
-        stop(f"{error}. Nothing was written")
+        stop(f"{error}" + ("" if error.outcome_unknown else ". Nothing was written"))
     return copied
 
 

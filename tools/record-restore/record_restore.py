@@ -46,7 +46,12 @@ KEY_SQL = ("SELECT COLUMN_NAME AS name FROM information_schema.KEY_COLUMN_USAGE 
 
 
 class RestoreError(Exception):
-    """A reason to stop, for a person to read. Raised before anything is written, or after a rollback."""
+    """A reason to stop, for a person to read. Raised before anything is written, or after a rollback,
+    unless outcome_unknown: then a commit's answer was lost, and the rows may or may not be there."""
+
+    def __init__(self, message, outcome_unknown=False):
+        super().__init__(message)
+        self.outcome_unknown = outcome_unknown
 
 
 def shown(name):
@@ -163,6 +168,12 @@ def describe_table(db, table):
     key = [k["name"] for k in db.query(KEY_SQL, name)]
     if not key:
         raise RestoreError(f"{table} has no primary key: the key is how only the missing rows are copied")
+    for column in columns:
+        # A timestamp is compared in the session's time zone, and a float isn't compared exactly: either
+        # could make a missing row look present, and skip it silently.
+        if column.name in key and (column.type == "timestamp" or column.kind == "float"):
+            raise RestoreError(f"{table}.{column.name} is {column.type}, in the primary key: this tool can't "
+                               "tell reliably which rows are missing by it")
     return columns, key
 
 
@@ -311,10 +322,15 @@ def copy_missing(db, table, columns, key, rows, write=True, batch_bytes=BATCH_BY
             db.query("SET time_zone = '+00:00'", (), transaction)  # every time in the CSV is UTC
             for parameter_sets in batches_by_size([parameters(columns, r) for r in missing], batch_bytes):
                 db.insert(statement, parameter_sets, transaction)
-            db.commit(transaction)
         except BaseException:
             db.rollback(transaction)
             raise
+        try:
+            db.commit(transaction)
+        except RestoreError as error:  # the answer was lost: the commit may have happened
+            raise RestoreError(f"the commit's outcome is unknown ({error}). Run again with --check: it counts "
+                               "which rows are in the table, and a rerun copies only the missing ones",
+                               outcome_unknown=True) from None
     return len(missing), len(rows) - len(missing)
 
 
@@ -349,7 +365,13 @@ class DataApi:
         self.database = database
 
     def run(self, *args):
-        result = subprocess.run(["aws", "rds-data", *args, *self.target], capture_output=True, text=True)
+        try:
+            result = subprocess.run(["aws", "rds-data", *args, *self.target], capture_output=True, text=True)
+        except FileNotFoundError:
+            raise RestoreError("the AWS CLI isn't installed, or isn't on the PATH") from None
+        except OSError as error:  # Linux caps one argument at 128 KiB: a very wide row can exceed it
+            raise RestoreError(f"a request is too large to send from this computer ({error.strerror}). "
+                               "A row is too wide for the AWS CLI") from None
         if result.returncode != 0:
             raise RestoreError(f"the RDS Data API refused: {result.stderr.strip()[:300]}")
         return json.loads(result.stdout or "{}")
@@ -390,7 +412,7 @@ def main(argv=None, database=None):
         checked = check_rows(columns, key, header, rows)
         missing, already = copy_missing(db, args.table, columns, key, checked, write=not args.check)
     except RestoreError as error:
-        print(f"STOP: {error}. Nothing was written", file=sys.stderr)
+        print(f"STOP: {error}" + ("" if error.outcome_unknown else ". Nothing was written"), file=sys.stderr)
         return 1
     if args.check:
         print(f"checked {len(checked)} rows: {missing} missing from {args.table}, {already} already there. "

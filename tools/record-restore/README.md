@@ -42,7 +42,7 @@ Download the CSV from Clumio, and pass it untouched. A spreadsheet re-save erase
 
 ## What it does, and when it stops
 
-Every stop names the row and column, and writes nothing.
+A stop says what's wrong, with the row and column when it's a value, and writes nothing. The one exception is a lost commit answer, below.
 
 | Case | Result |
 |---|---|
@@ -53,6 +53,8 @@ Every stop names the row and column, and writes nothing.
 | A column's type isn't one of the types below | STOP, naming the type |
 | A value doesn't fit its column: not a number, too long, or NULL in a NOT NULL column | STOP |
 | The database isn't in strict SQL mode | STOP, before anything is written |
+| A `timestamp` or `float` column is in the primary key | STOP: such keys can make a missing row look present |
+| The commit's answer is lost on the way back | STOP, saying the outcome is unknown. Run again with `--check`: it counts what's in the table, and a rerun copies only what's missing |
 | The table compares keys differently from the CSV, for example ignoring upper and lower case | STOP: it can't tell which rows are missing |
 | MySQL refuses a value, for example out of range for its integer type, or a character the column's character set can't hold | Everything copied so far is undone, and the copy stops with MySQL's reason |
 | The file repeats a row exactly | Read once |
@@ -67,7 +69,7 @@ Every stop names the row and column, and writes nothing.
 | `decimal`, `numeric` | A number, within the column's digits and scale | Yes |
 | `char`, `varchar`, `tinytext`, `text`, `mediumtext`, `longtext` | Text, kept exactly, spaces and newlines included | Yes |
 | `datetime`, with up to 3 fractional digits | Microseconds since 1970 in UTC, as Clumio writes it, or ISO 8601 | Yes, microseconds |
-| `timestamp`, with up to 3 fractional digits | The same. The copy runs in UTC, so the values aren't shifted by the cluster's time zone | No: check the result |
+| `timestamp`, with up to 3 fractional digits | The same. Rows are written in UTC, so the values aren't shifted by the cluster's time zone | No: check the result |
 | `date` | ISO 8601, such as `2026-10-24` | No: check the result |
 | `float`, `double` | A number | No: check the result |
 

@@ -349,6 +349,48 @@ class AllOrNothing(unittest.TestCase):
         self.assertEqual(rr.copy_missing(db, "t", columns, key, rows), (0, 1))
 
 
+class OnlyTrueMessages(unittest.TestCase):
+    """Findings that could write wrong data or print a false message (the rule after review)."""
+
+    def test_timestamp_and_float_keys_are_refused(self):
+        # A timestamp key is looked up in the cluster's time zone; a float key doesn't compare exactly.
+        for column in (SHIPMENTS[6], SHIPMENTS[5]):
+            db = FakeDatabase({"t": [dict(column, nullable="NO")]}, {"t": [column["name"]]})
+            with self.subTest(column["name"]), self.assertRaises(rr.RestoreError) as caught:
+                rr.describe_table(db, "t")
+            self.assertIn("primary key", str(caught.exception))
+
+    def test_a_lost_commit_response_doesnt_claim_nothing_was_written(self):
+        db = FakeDatabase({"t": SHIPMENTS[:2]}, {"t": ["region", "number"]})
+
+        def lost(_transaction):
+            raise rr.RestoreError("the RDS Data API refused: connection reset")
+        db.commit = lost
+        path = write_csv("region,number\nMY,1\n")
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = rr.main(["--csv", path, "--table", "t"], database=db)
+        finally:
+            os.unlink(path)
+        self.assertEqual(code, 1)
+        self.assertIn("outcome is unknown", err.getvalue())
+        self.assertNotIn("Nothing was written", err.getvalue())
+
+    def test_a_request_too_large_for_this_computer_is_a_named_stop(self):
+        saved = rr.subprocess.run
+
+        def too_long(*_a, **_k):
+            raise OSError(7, "Argument list too long")
+        rr.subprocess.run = too_long
+        try:
+            with self.assertRaises(rr.RestoreError) as caught:
+                rr.DataApi("arn:cluster", "arn:secret", "orders", "ap-southeast-2").query("SELECT 1")
+        finally:
+            rr.subprocess.run = saved
+        self.assertIn("too large", str(caught.exception))
+
+
 class SmallBoundaries(unittest.TestCase):
     def test_numbers_python_reads_but_mysql_wouldnt_mean_the_same(self):
         ratio = rr.Column("ratio", "double", "float", True, None, 22, None, 0)

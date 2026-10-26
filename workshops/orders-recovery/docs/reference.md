@@ -73,6 +73,9 @@ Find the message you see in the first column. Every `STOP` message also says wha
 | `STOP: no SecureVault recovery point of …` from `./lab break` | The safety gate: Clumio has no copy to recover from yet | Nothing was changed. Wait until `./lab status` says `ready for the incidents  yes`. |
 | Record restore: error code 111 | The table name in the query is incomplete | Copy it again with the copy icon in **Schema browser**. |
 | `STOP: the CSV lacks …` or `STOP: the CSV has …, which the table lacks` | The query selected other columns than the table has | Query with `SELECT *`, as in Module 4A, step 3. |
+| `STOP: the RDS Data API refused: …` from `./lab repair --from-csv` | AWS or MySQL refused a call, and gives its reason: an expired sign-in, the Data API still starting, or a value MySQL won't take | Nothing was written. Sign in again if it expired; if the Data API is starting, wait a minute. Then run it again. |
+| `STOP: this database isn't in strict SQL mode` | MySQL could change a value that doesn't fit, instead of refusing it | Nothing was written. Add `STRICT_TRANS_TABLES` to the cluster's `sql_mode`, as Aurora MySQL has by default. |
+| `STOP: the commit's outcome is unknown` | The answer to the final commit was lost | Run `./lab check`. If orders are still missing, run the repair again: it copies only what's missing. |
 | `STOP: row …, <column>: …` from `./lab repair --from-csv` | A value doesn't fit its column in the `orders` table: not a number, too long, or NULL where it can't be | Download the CSV again from Clumio, and pass it untouched. A spreadsheet re-save changes values. |
 | `STOP: the CSV has an order this workshop didn't make` | Another file, or another table | Download the CSV from this record restore. |
 | The restored records can't be downloaded | Their download window passed | Run the record restore again. |
