@@ -229,19 +229,36 @@ class RecordRestoreCsv(unittest.TestCase):
     FIXTURE = os.path.join(HERE, "fixtures", "record-restore-orders-6-to-10.csv")
 
     def repair(self, path, present=()):
+        import sys as _sys
+        _sys.path.insert(0, lab.TOOLS)
+        import record_restore
+        columns = self.COLUMNS
         inserted = []
 
-        def fake_sql(_arn, statement, parameters=()):
-            values = {p["name"]: list(p["value"].values())[0] for p in parameters}
-            if "information_schema.COLUMNS" in statement:
-                keys = ("name", "type", "nullable", "length", "precision", "scale", "time_digits")
-                return [dict(zip(keys, c)) for c in self.COLUMNS]
-            if "information_schema.KEY_COLUMN_USAGE" in statement:
-                return [{"name": "id"}]
-            return [{"id": v} for v in values.values() if v in present]  # which of these ids are there
-        saved = (lab.sql, lab.aws, lab.secret_arn)
-        lab.sql, lab.secret_arn = fake_sql, (lambda: "arn:secret")
-        lab.aws = lambda *args, **_k: inserted.append(json.loads(args[args.index("--parameter-sets") + 1]))
+        class FakeDatabase:  # answers like Aurora MySQL through the RDS Data API
+            def __init__(self, *_args):
+                pass
+
+            def query(self, statement, parameters=(), transaction=None):
+                values = {p["name"]: list(p["value"].values())[0] for p in parameters}
+                if "information_schema.COLUMNS" in statement:
+                    keys = ("name", "type", "nullable", "length", "precision", "scale", "time_digits")
+                    return [dict(zip(keys, c)) for c in columns]
+                if "information_schema.KEY_COLUMN_USAGE" in statement:
+                    return [{"name": "id"}]
+                if "sql_mode" in statement:
+                    return [{"mode": "STRICT_TRANS_TABLES"}]
+                if statement.startswith("SET"):
+                    return []
+                return [{"id": v} for v in values.values() if v in present]  # which of these ids are there
+
+            def insert(self, _statement, parameter_sets, _transaction):
+                inserted.extend(parameter_sets)
+
+            begin = lambda self: "tx"  # noqa: E731
+            commit = rollback = lambda self, _t: None  # noqa: E731
+        saved = (record_restore.DataApi, lab.secret_arn)
+        record_restore.DataApi, lab.secret_arn = FakeDatabase, (lambda: "arn:secret")
         error = io.StringIO()
         try:
             with contextlib.redirect_stderr(error):
@@ -249,8 +266,8 @@ class RecordRestoreCsv(unittest.TestCase):
         except SystemExit:
             copied = "STOP"
         finally:
-            lab.sql, lab.aws, lab.secret_arn = saved
-        rows = [{p["name"]: list(p["value"].values())[0] for p in row} for batch in inserted for row in batch]
+            record_restore.DataApi, lab.secret_arn = saved
+        rows = [{p["name"]: list(p["value"].values())[0] for p in row} for row in inserted]
         return copied, rows, error.getvalue()
 
     def test_the_real_clumio_file_copies_back_exactly_what_was_loaded(self):

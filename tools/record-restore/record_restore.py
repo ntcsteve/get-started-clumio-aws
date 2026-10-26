@@ -23,12 +23,13 @@ import subprocess
 import sys
 
 SAFE_NAME = r"[A-Za-z_][A-Za-z0-9_]{0,63}"  # names go into SQL as identifiers, so only these
-BATCH = 200  # rows per statement: well under the RDS Data API's request size limit
+LOOKUP_BATCH = 200  # keys per lookup query
+BATCH_BYTES = 100_000  # parameters per insert request: under Linux's 128 KiB limit for one command-line argument
 
 # information_schema's DATA_TYPE, by the rule that reads it. Anything else stops, naming the type.
-KINDS = {**{t: "integer" for t in ("tinyint", "smallint", "mediumint", "int", "integer", "bigint")},
-         **{t: "decimal" for t in ("decimal", "numeric")},
-         **{t: "float" for t in ("float", "double", "real")},
+KINDS = {**{t: "integer" for t in ("tinyint", "smallint", "mediumint", "int", "bigint")},
+         "decimal": "decimal",
+         **{t: "float" for t in ("float", "double")},
          **{t: "text" for t in ("char", "varchar", "tinytext", "text", "mediumtext", "longtext")},
          "date": "date", "datetime": "time", "timestamp": "time"}
 # Aurora MySQL's own limits for each time type, in UTC.
@@ -45,11 +46,12 @@ KEY_SQL = ("SELECT COLUMN_NAME AS name FROM information_schema.KEY_COLUMN_USAGE 
 
 
 class RestoreError(Exception):
-    """A reason to stop, for a person to read. `written` counts rows already copied when it happened."""
+    """A reason to stop, for a person to read. Raised before anything is written, or after a rollback."""
 
-    def __init__(self, message, written=0):
-        super().__init__(message)
-        self.written = written
+
+def shown(name):
+    """A name from the CSV, made safe to print: quoted, control characters escaped, length capped."""
+    return repr(name[:40])
 
 
 # --- 1. Read the file ---------------------------------------------------------------------------
@@ -124,7 +126,7 @@ def read_csv(path, max_mb):
     header = [value.strip().lower() for value, _quoted in records[0]] if records else []
     repeated = sorted({name for name in header if header.count(name) > 1})
     if repeated:
-        raise RestoreError(f"the CSV's header names {', '.join(repeated)} twice. Download it again from Clumio")
+        raise RestoreError(f"the CSV's header names {', '.join(map(shown, repeated))} twice. Download it again from Clumio")
     rows = []
     for number, record in enumerate(records[1:], 2):
         if record == [("", False)]:  # a blank line
@@ -139,13 +141,13 @@ def read_csv(path, max_mb):
 
 # --- 2. Describe the table ----------------------------------------------------------------------
 
-def describe_table(query, table):
-    """(columns, primary key column names) of a table, from information_schema. query(statement,
-    parameters) returns rows as dicts. Stops on a table it can't copy into safely."""
+def describe_table(db, table):
+    """(columns, primary key column names) of a table, from information_schema. db is a DataApi, or
+    anything with the same methods. Stops on a table it can't copy into safely."""
     if not re.fullmatch(SAFE_NAME, table):
         raise RestoreError(f"{table!r} isn't a table name this tool accepts (letters, digits and _)")
     name = [{"name": "table", "value": {"stringValue": table}}]
-    found = query(COLUMNS_SQL, name)
+    found = db.query(COLUMNS_SQL, name)
     if not found:
         raise RestoreError(f"there's no table {table} in this database")
     columns = []
@@ -158,7 +160,7 @@ def describe_table(query, table):
                                "Add it in record_restore.py, in read_value, with a test")
         columns.append(Column(c["name"], str(c["type"]).lower(), kind, c["nullable"] == "YES", c.get("length"),
                               c.get("precision"), c.get("scale"), time_digits))
-    key = [k["name"] for k in query(KEY_SQL, name)]
+    key = [k["name"] for k in db.query(KEY_SQL, name)]
     if not key:
         raise RestoreError(f"{table} has no primary key: the key is how only the missing rows are copied")
     return columns, key
@@ -193,12 +195,12 @@ def read_value(column, text, row, earliest=None, latest=None):
             raise RestoreError(f"{where}: {value[:30]!r} doesn't fit decimal({precision},{scale})")
         return f"{decimal.Decimal(value):.{scale}f}"
     if column.kind == "float":
-        try:
-            number = float(value)
-        except ValueError:
-            number = math.nan
-        if not math.isfinite(number):
+        # Python also reads "1_000", "inf" and "nan"; MySQL doesn't, so only plain numbers pass.
+        if not re.fullmatch(r"-?[0-9]{1,309}(\.[0-9]{1,30})?([eE][-+]?[0-9]{1,3})?", value):
             raise RestoreError(f"{where}: {value[:30]!r} isn't a number")
+        number = float(value)
+        if not math.isfinite(number):
+            raise RestoreError(f"{where}: {value[:30]!r} is too large")
         return number
     if column.kind == "date":
         try:
@@ -215,7 +217,7 @@ def read_time(column, value, where, earliest, latest):
     low = max(low, datetime.datetime.fromisoformat(earliest)) if earliest else low
     high = min(high, datetime.datetime.fromisoformat(latest)) if latest else high
     epoch = datetime.datetime(1970, 1, 1)
-    if re.fullmatch(r"[0-9]{1,19}", value):
+    if re.fullmatch(r"-?[0-9]{1,19}", value):  # negative: before 1970
         microseconds = int(value)  # checked as a number first, so a huge one can't overflow the conversion
         if not (low - epoch) // datetime.timedelta(microseconds=1) <= microseconds < (high - epoch) // datetime.timedelta(microseconds=1):
             raise RestoreError(f"{where}: {value[:30]!r} isn't a time in microseconds since 1970, from {low:%Y-%m-%d} to {high:%Y-%m-%d}")
@@ -245,7 +247,7 @@ def check_rows(columns, key, header, rows, earliest=None, latest=None):
         raise RestoreError(f"the CSV lacks {', '.join(lacking)}, which the table has. Query the archive with SELECT *")
     extra = [h for h in header if h not in names]
     if extra:
-        raise RestoreError(f"the CSV has {', '.join(extra)}, which the table lacks. Query the archive with SELECT *")
+        raise RestoreError(f"the CSV has {', '.join(map(shown, extra))}, which the table lacks. Query the archive with SELECT *")
     by_key = {}
     for number, row in enumerate(rows, 2):
         checked = {c.name: read_value(c, row[c.name.lower()], number, earliest, latest) for c in columns}
@@ -278,31 +280,56 @@ def parameters(columns, row):
     return result
 
 
-def copy_missing(query, insert, table, columns, key, rows, write=True):
-    """(missing, already there). Copies the missing rows unless write is False. insert(statement,
-    parameter_sets) runs one statement once per parameter set."""
+def copy_missing(db, table, columns, key, rows, write=True, batch_bytes=BATCH_BYTES):
+    """(missing, already there). Copies the missing rows unless write is False, in one transaction: MySQL
+    is the final judge of every value, and any refusal undoes every row. Stops first unless MySQL is in
+    strict SQL mode, which refuses a value that doesn't fit instead of changing it."""
     key_columns = [next(c for c in columns if c.name == k) for k in key]
     present = set()
-    for start in range(0, len(rows), BATCH):
-        batch = rows[start:start + BATCH]
+    for start in range(0, len(rows), LOOKUP_BATCH):
+        batch = rows[start:start + LOOKUP_BATCH]
         tuples = ", ".join("(" + ", ".join(f":k{i}_{j}" for j in range(len(key))) + ")" for i in range(len(batch)))
         statement = (f"SELECT {', '.join(f'`{k}`' for k in key)} FROM `{table}` "
                      f"WHERE ({', '.join(f'`{k}`' for k in key)}) IN ({tuples})")
         named = [dict(p, name=f"k{i}_{j}") for i, r in enumerate(batch) for j, p in enumerate(parameters(key_columns, r))]
-        found = query(statement, named)
-        present |= {tuple(read_found(c, f[c.name]) for c in key_columns) for f in found}
+        found = {tuple(read_found(c, f[c.name]) for c in key_columns) for f in db.query(statement, named)}
+        asked = {tuple(r[k] for k in key) for r in batch}
+        if not found <= asked:  # e.g. a case-insensitive collation: "my" matched "MY"
+            raise RestoreError(f"{table} compares keys differently from the CSV (for example, ignoring upper and "
+                               "lower case), so the tool can't tell which rows are missing")
+        present |= found
     missing = [r for r in rows if tuple(r[k] for k in key) not in present]
-    if write:
+    if write and missing:
         statement = (f"INSERT INTO `{table}` ({', '.join(f'`{c.name}`' for c in columns)}) "
                      f"VALUES ({', '.join(f':{c.name}' for c in columns)})")
-        copied = 0
-        for start in range(0, len(missing), BATCH):
-            try:
-                insert(statement, [parameters(columns, r) for r in missing[start:start + BATCH]])
-            except RestoreError as error:
-                raise RestoreError(str(error), written=copied) from None
-            copied += len(missing[start:start + BATCH])
+        transaction = db.begin()
+        try:
+            modes = db.query("SELECT @@SESSION.sql_mode AS mode", (), transaction)[0]["mode"]
+            if "STRICT_TRANS_TABLES" not in modes and "STRICT_ALL_TABLES" not in modes:
+                raise RestoreError("this database isn't in strict SQL mode, so MySQL could change a value that "
+                                   "doesn't fit instead of refusing it. Add STRICT_TRANS_TABLES to its sql_mode")
+            db.query("SET time_zone = '+00:00'", (), transaction)  # every time in the CSV is UTC
+            for parameter_sets in batches_by_size([parameters(columns, r) for r in missing], batch_bytes):
+                db.insert(statement, parameter_sets, transaction)
+            db.commit(transaction)
+        except BaseException:
+            db.rollback(transaction)
+            raise
     return len(missing), len(rows) - len(missing)
+
+
+def batches_by_size(parameter_sets, limit):
+    """The parameter sets in groups whose JSON stays within limit bytes, so wide rows make small batches."""
+    batch, size = [], 2
+    for one in parameter_sets:
+        one_size = len(json.dumps(one)) + 2
+        if batch and size + one_size > limit:
+            yield batch
+            batch, size = [], 2
+        batch.append(one)
+        size += one_size
+    if batch:
+        yield batch
 
 
 def read_found(column, value):
@@ -314,24 +341,37 @@ def read_found(column, value):
 
 # --- The command line ---------------------------------------------------------------------------
 
-def data_api(cluster_arn, secret_arn, database, region):
-    """query and insert functions over the AWS CLI's RDS Data API."""
-    def run(*args):
-        result = subprocess.run(["aws", "rds-data", *args, "--resource-arn", cluster_arn, "--secret-arn", secret_arn,
-                                 "--database", database, "--region", region, "--output", "json"],
-                                capture_output=True, text=True)
+class DataApi:
+    """The database, through the AWS CLI's RDS Data API. No shell: arguments go straight to the CLI."""
+
+    def __init__(self, cluster_arn, secret_arn, database, region):
+        self.target = ["--resource-arn", cluster_arn, "--secret-arn", secret_arn, "--region", region, "--output", "json"]
+        self.database = database
+
+    def run(self, *args):
+        result = subprocess.run(["aws", "rds-data", *args, *self.target], capture_output=True, text=True)
         if result.returncode != 0:
             raise RestoreError(f"the RDS Data API refused: {result.stderr.strip()[:300]}")
         return json.loads(result.stdout or "{}")
 
-    def query(statement, params=()):
-        answer = run("execute-statement", "--sql", statement, "--parameters", json.dumps(list(params)),
-                     "--format-records-as", "JSON")
+    def query(self, statement, parameters=(), transaction=None):
+        within = ["--transaction-id", transaction] if transaction else []
+        answer = self.run("execute-statement", "--database", self.database, "--sql", statement,
+                          "--parameters", json.dumps(list(parameters)), "--format-records-as", "JSON", *within)
         return json.loads(answer.get("formattedRecords") or "[]")
 
-    def insert(statement, parameter_sets):
-        run("batch-execute-statement", "--sql", statement, "--parameter-sets", json.dumps(parameter_sets))
-    return query, insert
+    def insert(self, statement, parameter_sets, transaction):
+        self.run("batch-execute-statement", "--database", self.database, "--sql", statement,
+                 "--parameter-sets", json.dumps(parameter_sets), "--transaction-id", transaction)
+
+    def begin(self):
+        return self.run("begin-transaction", "--database", self.database)["transactionId"]
+
+    def commit(self, transaction):
+        self.run("commit-transaction", "--transaction-id", transaction)
+
+    def rollback(self, transaction):
+        self.run("rollback-transaction", "--transaction-id", transaction)
 
 
 def main(argv=None, database=None):
@@ -343,15 +383,14 @@ def main(argv=None, database=None):
     for name in ("--database", "--cluster-arn", "--secret-arn", "--region"):
         parser.add_argument(name, required=database is None)
     args = parser.parse_args(argv)
-    query, insert = database or data_api(args.cluster_arn, args.secret_arn, args.database, args.region)
+    db = database or DataApi(args.cluster_arn, args.secret_arn, args.database, args.region)
     try:
-        columns, key = describe_table(query, args.table)
+        columns, key = describe_table(db, args.table)
         header, rows = read_csv(args.csv, args.max_mb)
         checked = check_rows(columns, key, header, rows)
-        missing, already = copy_missing(query, insert, args.table, columns, key, checked, write=not args.check)
+        missing, already = copy_missing(db, args.table, columns, key, checked, write=not args.check)
     except RestoreError as error:
-        done = f"{error.written} rows were copied before this; run it again to copy the rest" if error.written else "Nothing was written"
-        print(f"STOP: {error}. {done}", file=sys.stderr)
+        print(f"STOP: {error}. Nothing was written", file=sys.stderr)
         return 1
     if args.check:
         print(f"checked {len(checked)} rows: {missing} missing from {args.table}, {already} already there. "

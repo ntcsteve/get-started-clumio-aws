@@ -44,8 +44,7 @@ import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "..", "tools", "record-restore"))  # the kit's record-restore tool
-import record_restore  # noqa: E402  (after the path it needs)
+TOOLS = os.path.join(HERE, "..", "..", "tools", "record-restore")  # the kit's record-restore tool, used by repair
 EVIDENCE_DIR = os.path.join(HERE, ".lab")
 with open(os.path.join(HERE, "names.json")) as names_file:
     NAMES = json.load(names_file)  # {account} and {region} stay in until load_settings() fills them
@@ -1436,25 +1435,23 @@ PORTAL_PAGE = """<!doctype html>
 
 def repair_from_csv(cluster_arn, path):
     """Copies the missing orders from a Clumio record-restore CSV: the number copied. The kit's tool
-    (tools/record-restore) checks every row against the orders table's own definition first, so
-    nothing is written unless all of it passed."""
-    def query(statement, parameters=()):
-        return sql(cluster_arn, statement, parameters)
-
-    def insert(statement, parameter_sets):
-        aws("rds-data", "batch-execute-statement", "--resource-arn", cluster_arn, "--secret-arn", secret_arn(),
-            "--database", NAMES["database"], "--sql", statement, "--parameter-sets", json.dumps(parameter_sets))
+    (tools/record-restore) checks every row against the orders table's own definition, then copies in
+    one transaction, so nothing is written unless all of it passed."""
+    sys.path.insert(0, TOOLS)
+    import record_restore  # here, not at the top: only repair needs it
+    db = record_restore.DataApi(cluster_arn, secret_arn(), NAMES["database"], REGION)
     try:
-        columns, key = record_restore.describe_table(query, "orders")
+        columns, key = record_restore.describe_table(db, "orders")
         header, rows = record_restore.read_csv(path, CSV_SIZE_LIMIT_MB)
         # The sample data is from 2026: a time outside these years is a misread, such as milliseconds.
         orders = record_restore.check_rows(columns, key, header, rows, earliest="2000-01-01", latest="2101-01-01")
+        strangers = [o["id"] for o in orders if o["id"] not in ORDER_IDS]
+        if strangers:
+            raise record_restore.RestoreError(f"the CSV has an order this workshop didn't make (id {strangers[0]}). "
+                                              "Is it the right file?")
+        copied, _already_there = record_restore.copy_missing(db, "orders", columns, key, orders)  # only the missing
     except record_restore.RestoreError as error:
         stop(f"{error}. Nothing was written")
-    strangers = [o["id"] for o in orders if o["id"] not in ORDER_IDS]
-    if strangers:
-        stop(f"the CSV has an order this workshop didn't make (id {strangers[0]}). Is it the right file? Nothing was written")
-    copied, _already_there = record_restore.copy_missing(query, insert, "orders", columns, key, orders)  # only the missing
     return copied
 
 

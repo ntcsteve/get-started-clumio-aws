@@ -38,25 +38,49 @@ SHIPMENTS = [
 
 
 class FakeDatabase:
-    """Answers the tool's three questions like Aurora MySQL through the RDS Data API, and records inserts."""
+    """Answers like Aurora MySQL through the RDS Data API. Inserts land only on commit; a rollback
+    drops them. Text keys compare case-insensitively, as MySQL's default collation does."""
 
-    def __init__(self, tables, keys, existing=()):
-        self.tables, self.keys, self.existing, self.inserted = tables, keys, set(existing), []
+    def __init__(self, tables, keys, existing=(), strict=True, fail_on_insert=None):
+        self.tables, self.keys, self.existing = tables, keys, set(existing)
+        self.strict, self.fail_on_insert = strict, fail_on_insert
+        self.inserted, self.pending, self.log = [], [], []
 
-    def query(self, statement, parameters=()):
+    def query(self, statement, parameters=(), transaction=None):
         values = {p["name"]: list(p["value"].values())[0] for p in parameters}
         if "information_schema.COLUMNS" in statement:
             return list(self.tables.get(values["table"], []))
         if "information_schema.KEY_COLUMN_USAGE" in statement:
             return [{"name": n} for n in self.keys.get(values["table"], [])]
+        if statement.startswith("SELECT @@SESSION.sql_mode"):
+            return [{"mode": "STRICT_TRANS_TABLES,NO_ZERO_DATE" if self.strict else "NO_ZERO_DATE"}]
+        if statement.startswith("SET time_zone"):
+            self.log.append(("time zone", transaction))
+            return []
         if " IN (" in statement:  # which of these keys are already there: (:k0_0, :k0_1), (:k1_0, ...)
             names = statement[len("SELECT "):statement.index(" FROM")].replace("`", "").split(", ")
-            asked = {tuple(values[f"k{i}_{j}"] for j in range(len(names))) for i in range(len(values) // len(names))}
-            return [dict(zip(names, key)) for key in asked & self.existing]
+            asked = [tuple(values[f"k{i}_{j}"] for j in range(len(names))) for i in range(len(values) // len(names))]
+            fold = lambda key: tuple(v.lower() if isinstance(v, str) else v for v in key)  # noqa: E731
+            return [dict(zip(names, have)) for have in self.existing if fold(have) in {fold(a) for a in asked}]
         raise AssertionError(f"unexpected statement: {statement}")
 
-    def insert(self, statement, parameter_sets):
-        self.inserted.append((statement, parameter_sets))
+    def insert(self, statement, parameter_sets, transaction):
+        self.log.append(("insert", transaction))
+        if self.fail_on_insert and len([e for e in self.log if e[0] == "insert"]) == self.fail_on_insert:
+            raise rr.RestoreError("the RDS Data API refused: Duplicate entry")
+        self.pending.append((statement, parameter_sets))
+
+    def begin(self):
+        self.log.append(("begin", "tx-1"))
+        return "tx-1"
+
+    def commit(self, transaction):
+        self.log.append(("commit", transaction))
+        self.inserted, self.pending = self.inserted + self.pending, []
+
+    def rollback(self, transaction):
+        self.log.append(("rollback", transaction))
+        self.pending = []
 
 
 def write_csv(text):
@@ -92,7 +116,7 @@ class ReadingTheFile(unittest.TestCase):
         cases = {
             "too few fields": ("a,b\n1\n", "record 2 has 1 fields, the header has 2"),
             "too many fields": ("a,b\n1,2,3\n", "record 2 has 3 fields, the header has 2"),
-            "a repeated column": ("a,A\n1,2\n", "names a twice"),
+            "a repeated column": ("a,A\n1,2\n", "names 'a' twice"),
             "a broken quote": ('a\n"x\n', "malformed"),
             "no rows": ("a,b\n", "no rows"),
         }
@@ -125,7 +149,7 @@ class ReadingTheFile(unittest.TestCase):
 
 class TheTableDescribesItself(unittest.TestCase):
     def test_columns_and_key_come_from_information_schema(self):
-        columns, key = rr.describe_table(FakeDatabase({"orders": ORDERS}, {"orders": ["id"]}).query, "orders")
+        columns, key = rr.describe_table(FakeDatabase({"orders": ORDERS}, {"orders": ["id"]}), "orders")
         self.assertEqual([c.name for c in columns], [c["name"] for c in ORDERS])
         self.assertEqual(key, ["id"])
 
@@ -133,17 +157,17 @@ class TheTableDescribesItself(unittest.TestCase):
         db = FakeDatabase({"orders": ORDERS}, {})
         for table, message in (("nope", "no table nope"), ("orders", "no primary key")):
             with self.subTest(table), self.assertRaises(rr.RestoreError) as caught:
-                rr.describe_table(db.query, table)
+                rr.describe_table(db, table)
             self.assertIn(message, str(caught.exception))
 
     def test_an_unsafe_table_name_stops_before_any_query(self):
         with self.assertRaises(rr.RestoreError):
-            rr.describe_table(FakeDatabase({}, {}).query, "orders; DROP TABLE orders")
+            rr.describe_table(FakeDatabase({}, {}), "orders; DROP TABLE orders")
 
 
 class CheckingEveryRow(unittest.TestCase):
     def columns(self, table, key):
-        return rr.describe_table(FakeDatabase({"t": table}, {"t": key}).query, "t")
+        return rr.describe_table(FakeDatabase({"t": table}, {"t": key}), "t")
 
     def test_the_real_clumio_file_reads_back_exactly(self):
         # Downloaded from a live record restore (2026-10-24): every value quoted, NULL as an empty
@@ -208,7 +232,7 @@ class CheckingEveryRow(unittest.TestCase):
 
     def test_columns_must_match_the_table(self):
         columns, key = self.columns(SHIPMENTS[:2], ["region", "number"])
-        for header, message in ((["region"], "lacks number"), (["region", "number", "extra"], "has extra")):
+        for header, message in ((["region"], "lacks number"), (["region", "number", "extra"], "has 'extra'")):
             with self.subTest(message), self.assertRaises(rr.RestoreError) as caught:
                 rr.check_rows(columns, key, header, [{h: "1" for h in header}])
             self.assertIn(message, str(caught.exception))
@@ -237,14 +261,14 @@ class CheckingEveryRow(unittest.TestCase):
 class CopyingOnlyWhatsMissing(unittest.TestCase):
     def setup(self, existing):
         db = FakeDatabase({"t": SHIPMENTS[:2]}, {"t": ["region", "number"]}, existing)
-        columns, key = rr.describe_table(db.query, "t")
+        columns, key = rr.describe_table(db, "t")
         rows = rr.check_rows(columns, key, ["region", "number"],
                              [{"region": "MY", "number": "1"}, {"region": "MY", "number": "2"}])
         return db, columns, key, rows
 
     def test_rows_already_there_are_left_as_they_are(self):
         db, columns, key, rows = self.setup(existing={("MY", 1)})
-        result = rr.copy_missing(db.query, db.insert, "t", columns, key, rows)
+        result = rr.copy_missing(db, "t", columns, key, rows)
         self.assertEqual(result, (1, 1))  # 1 missing and copied, 1 already there
         statement, parameter_sets = db.inserted[0]
         self.assertEqual(statement, "INSERT INTO `t` (`region`, `number`) VALUES (:region, :number)")
@@ -253,12 +277,12 @@ class CopyingOnlyWhatsMissing(unittest.TestCase):
 
     def test_check_mode_writes_nothing(self):
         db, columns, key, rows = self.setup(existing=set())
-        self.assertEqual(rr.copy_missing(db.query, db.insert, "t", columns, key, rows, write=False), (2, 0))
+        self.assertEqual(rr.copy_missing(db, "t", columns, key, rows, write=False), (2, 0))
         self.assertEqual(db.inserted, [])
 
     def test_parameters_carry_each_type_and_null(self):
         db = FakeDatabase({"t": SHIPMENTS}, {"t": ["region", "number"]})
-        columns, _ = rr.describe_table(db.query, "t")
+        columns, _ = rr.describe_table(db, "t")
         row = {"region": "MY", "number": 1, "weight": "12.50", "label": None, "shipped_on": "2026-10-24",
                "ratio": 0.25, "seen_at": "2026-10-24 10:00:00"}
         values = {p["name"]: p for p in rr.parameters(columns, row)}
@@ -269,11 +293,88 @@ class CopyingOnlyWhatsMissing(unittest.TestCase):
         self.assertEqual(values["ratio"], {"name": "ratio", "value": {"doubleValue": 0.25}})
 
 
+class AllOrNothing(unittest.TestCase):
+    """MySQL is the final judge of every value; one transaction makes its verdict all or nothing."""
+
+    def rows(self, count):
+        return [{"region": "MY", "number": n} for n in range(1, count + 1)]
+
+    def test_a_refused_batch_undoes_every_batch(self):
+        db = FakeDatabase({"t": SHIPMENTS[:2]}, {"t": ["region", "number"]}, fail_on_insert=2)
+        columns, key = rr.describe_table(db, "t")
+        with self.assertRaises(rr.RestoreError) as caught:
+            rr.copy_missing(db, "t", columns, key, self.rows(1000), batch_bytes=2_000)  # small batches: several
+        self.assertIn("Duplicate entry", str(caught.exception))
+        self.assertEqual(db.inserted, [])
+        self.assertIn(("rollback", "tx-1"), db.log)
+
+    def test_a_database_not_in_strict_mode_stops_before_writing(self):
+        db = FakeDatabase({"t": SHIPMENTS[:2]}, {"t": ["region", "number"]}, strict=False)
+        columns, key = rr.describe_table(db, "t")
+        with self.assertRaises(rr.RestoreError) as caught:
+            rr.copy_missing(db, "t", columns, key, self.rows(2))
+        self.assertIn("strict SQL mode", str(caught.exception))
+        self.assertFalse([e for e in db.log if e[0] == "insert"])
+
+    def test_times_are_written_in_utc_inside_the_transaction(self):
+        db = FakeDatabase({"t": SHIPMENTS[:2]}, {"t": ["region", "number"]})
+        columns, key = rr.describe_table(db, "t")
+        rr.copy_missing(db, "t", columns, key, self.rows(2))
+        self.assertEqual([e for e in db.log if e[0] != "insert"][:3], [("begin", "tx-1"), ("time zone", "tx-1"), ("commit", "tx-1")])
+        self.assertTrue(all(t == "tx-1" for kind, t in db.log if kind == "insert"))
+
+    def test_batches_stay_under_the_size_limit(self):
+        db = FakeDatabase({"t": SHIPMENTS[:2]}, {"t": ["region", "number"]})
+        columns, key = rr.describe_table(db, "t")
+        rr.copy_missing(db, "t", columns, key, self.rows(1000), batch_bytes=5_000)
+        import json
+        self.assertTrue(all(len(json.dumps(sets)) <= 5_000 for _, sets in db.inserted))
+        self.assertEqual(sum(len(sets) for _, sets in db.inserted), 1000)
+
+    def test_a_key_the_database_compares_differently_stops(self):
+        # MySQL's default collation ignores case: "my" is already there as far as the database knows.
+        db = FakeDatabase({"t": SHIPMENTS[:2]}, {"t": ["region", "number"]}, existing={("my", 1)})
+        columns, key = rr.describe_table(db, "t")
+        with self.assertRaises(rr.RestoreError) as caught:
+            rr.copy_missing(db, "t", columns, key, self.rows(1))
+        self.assertIn("compares keys differently", str(caught.exception))
+        self.assertEqual(db.inserted, [])
+
+    def test_keys_as_the_data_api_returns_them_match(self):
+        # The Data API returns a DECIMAL as text and a BIGINT as a number (seen live).
+        table = [dict(SHIPMENTS[2], nullable="NO"), SHIPMENTS[1]]
+        db = FakeDatabase({"t": table}, {"t": ["weight", "number"]}, existing={("12.50", 7)})
+        columns, key = rr.describe_table(db, "t")
+        rows = rr.check_rows(columns, key, ["weight", "number"], [{"weight": "12.5", "number": "7"}])
+        self.assertEqual(rr.copy_missing(db, "t", columns, key, rows), (0, 1))
+
+
+class SmallBoundaries(unittest.TestCase):
+    def test_numbers_python_reads_but_mysql_wouldnt_mean_the_same(self):
+        ratio = rr.Column("ratio", "double", "float", True, None, 22, None, 0)
+        with self.assertRaises(rr.RestoreError):
+            rr.read_value(ratio, "1_000", 2)
+        self.assertEqual(rr.read_value(ratio, "-2.5e3", 2), -2500.0)
+
+    def test_a_time_before_1970(self):
+        at = rr.Column("born", "datetime", "time", False, None, None, None, 0)
+        self.assertEqual(rr.read_value(at, "-86400000000", 2), "1969-12-31 00:00:00")
+
+    def test_header_names_are_shown_safely(self):
+        path = write_csv("\x1b[31mred,\x1b[31mred\n1,2\n")
+        try:
+            with self.assertRaises(rr.RestoreError) as caught:
+                rr.read_csv(path, 1)
+        finally:
+            os.unlink(path)
+        self.assertNotIn("\x1b", str(caught.exception))
+
+
 class TheCommandLine(unittest.TestCase):
     def run_main(self, argv, db):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = rr.main(argv, database=(db.query, db.insert))
+            code = rr.main(argv, database=db)
         return code, out.getvalue(), err.getvalue()
 
     def test_check_then_copy(self):
