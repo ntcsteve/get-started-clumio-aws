@@ -32,8 +32,6 @@ What it gives a cloud team, as Clumio's documentation describes it:
 
 What it isn't: Backtrack needs S3 Versioning, and rolls back only to points up to its last daily sync. For databases, Clumio sets AWS point-in-time recovery rather than replacing it. An Aurora restore creates a new cluster. Archive recovery points in cold storage take up to 48 hours to prepare for a query. This repository doesn't cover EC2 and EBS protection (`"ebs"` creates only its IAM), DynamoDB, Iceberg, SQL Server on EC2, or SecureVault Archive for S3.
 
-How it compares with AWS Backup, and when AWS Backup alone is enough: [Clumio and AWS Backup](docs/clumio-and-aws-backup.md).
-
 ## Why this repository
 
 Connecting Clumio is mostly an IAM problem. Clumio needs IAM roles and policies in your account. In a company account, the identity that creates them usually has limited permissions and must follow naming rules. When the two don't match, setup fails one permission at a time and can leave a half-built connection.

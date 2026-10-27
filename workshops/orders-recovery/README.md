@@ -56,7 +56,7 @@ Clumio by Commvault protects AWS data, and recovers it at the scope you need: an
 - **Backtrack** rolls an S3 bucket back in place, from the versions in your own bucket.
 - **Protection as code.** A Clumio policy is a Terraform resource, so it deploys with the application. Clumio works through IAM roles in your account, with no agents or servers to run.
 
-The repo's main README explains [why Clumio](../../README.md#why-clumio), and how it compares with [AWS Backup](../../docs/clumio-and-aws-backup.md).
+The repo's main README explains [why Clumio](../../README.md#why-clumio).
 
 ## What you build
 
