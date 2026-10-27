@@ -42,7 +42,7 @@ Next, the worst case. Anything with enough access to the account can delete the 
 
    ![Amazon RDS console, Automated backups: nothing listed for orders-db](../images/5-1-no-automated-backups.png)
 
-4. See what protects Clumio's copies. In the Clumio console, choose **Administration**, **Backup deletion**. Look only, and don't submit anything. Deleting a recovery point before its retention ends takes a request from a Super Admin, approved by a second person in your organization, which Clumio then reviews. Even someone with full access to the account, or to Clumio, can't quietly delete your way back.
+4. See what protects Clumio's copies. In the Clumio console, choose **Administration**, **Backup deletion**. Look only, and don't submit anything. Deleting a recovery point before its retention ends takes a request from a Super Admin, approved by a second person in your organization, which Clumio then reviews. No one person can delete your way back alone, even with full access to the account or to Clumio.
 
    ![Clumio Administration, Backup deletion: deletion requests, each with a Docusign status for its signed approval](../images/5-2-backup-deletion.png)
 
