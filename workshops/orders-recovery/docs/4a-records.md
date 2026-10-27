@@ -13,7 +13,7 @@ The bad deployment deleted 100 orders. Customers kept ordering since, so rolling
 
 Skipped Module 2, step 6, because the archive was still preparing? You can run its two queries now, before step 3, to see what was there before the bad deployment.
 
-**Requires:** the archive recovery point from [Module 1, step 7](1-deploy.md#wait-for-the-first-recovery-points), ready to query. It was taken before the bad deployment, so it holds every order the bad deployment deleted.
+You need the archive recovery point from [Module 1, step 7](1-deploy.md#wait-for-the-first-recovery-points), ready to query. It was taken before the bad deployment, so it holds every order the bad deployment deleted.
 
 1. Open **Record restore**: from Clumio's email, or in the Clumio console under **AWS**, **Inventory**, **RDS resources**, `orders-db`, by choosing **Restore** on that archive recovery point. If Clumio lists more than one `orders-db`, first, at the top of **Inventory**, choose your account in **All accounts** and your Region in **All regions**.
 
@@ -118,56 +118,5 @@ Two things to know before you rely on it in production:
 ### In production: your own tables
 
 For a table of your own in Aurora MySQL, use the kit's [record-restore tool](../../../tools/record-restore/README.md). It reads the table's definition, checks every row of Clumio's CSV against it, and copies only the missing rows: `--check` first, then the copy. No code changes per table.
-
-To do the same by hand, a DBA writes it in SQL:
-
-> [!WARNING]
-> Not run live. The `./lab` path above was proven in the test run. This SQL follows [MySQL's documented behavior](https://dev.mysql.com/doc/refman/8.0/en/load-data.html). Test the `CASE` column in Clumio's record restore, and `LOAD DATA` on Aurora MySQL 3, before you rely on it.
-
-The tool and `./lab repair --from-csv` stage the file, check it, and copy only the missing rows. In SQL, a DBA does the same in four steps: stage, validate, merge, reconcile. Two details decide whether the data comes back exact:
-
-- **NULL.** MySQL's `LOAD DATA` reads an empty field as empty text, and only `\N` or a bare `NULL` as NULL. Clumio's CSV writes NULL as an empty field, so a plain `LOAD DATA` turns every NULL note into empty text, and `./lab check` reports `orders changed  14 (note: 14)`, BROKEN. Add a column to the record-restore query that says which notes are NULL, and use it when you load.
-- **Times.** The archive writes `placed_at` as microseconds since 1970, in UTC. Set the session to UTC before you convert, or every time shifts by your offset.
-
-The record-restore query, with the extra column:
-
-```sql
-SELECT *, CASE WHEN note IS NULL THEN 1 ELSE 0 END AS note_is_null
-FROM <orders table> WHERE id % 10 = 0 ORDER BY id
-```
-
-Then, in the database:
-
-```sql
--- 1. Stage: an empty copy of the table, loaded from the CSV
-SET time_zone = '+00:00';
-CREATE TABLE orders_restore LIKE orders;
-LOAD DATA LOCAL INFILE 'orders.csv' INTO TABLE orders_restore
-  CHARACTER SET utf8mb4
-  FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY ''
-  LINES TERMINATED BY '\n' IGNORE 1 LINES
-  (id, customer, total, status, @note, @placed_at, document_key, document_sha256, @note_is_null)
-  SET note = IF(@note_is_null = '1', NULL, @note),
-      placed_at = FROM_UNIXTIME(@placed_at / 1000000);
-
--- 2. Validate: these must equal the archive's own answer (100, the total, and the NULL count)
-SELECT COUNT(*), SUM(total), SUM(note IS NULL) FROM orders_restore;
-SELECT COUNT(*) FROM orders_restore r JOIN orders o USING (id);   -- 0: only missing orders
-
--- 3. Merge: only the orders that are missing, in one transaction
-START TRANSACTION;
-INSERT INTO orders SELECT * FROM orders_restore r
-  WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = r.id);
-COMMIT;
-
--- 4. Reconcile: every column, NULL-safe (<=>); 0 means identical
-SELECT COUNT(*) FROM orders o JOIN orders_restore r USING (id)
-  WHERE NOT (o.customer <=> r.customer AND o.total <=> r.total AND o.status <=> r.status
-         AND o.note <=> r.note AND o.placed_at <=> r.placed_at
-         AND o.document_key <=> r.document_key AND o.document_sha256 <=> r.document_sha256);
-DROP TABLE orders_restore;
-```
-
-On Aurora, `LOAD DATA FROM S3` loads the file from a bucket instead of your computer. It needs an IAM role on the cluster: see [Loading data into Aurora MySQL from Amazon S3](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Integrating.LoadFromS3.html). Then compare the table's definition with your migrations: `SHOW CREATE TABLE orders`.
 
 **Next:** [4B. Recover the whole database](4b-database.md)

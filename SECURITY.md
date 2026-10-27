@@ -106,13 +106,63 @@ To see Clumio use the key, look in CloudTrail for KMS calls on it by Clumio's us
 
 ## What is proven, and what isn't
 
-Tested live on a Clumio test tenant three times: in September 2026 at commit f257189; on 2026-10-24, on a version just before commit bef3aca, which calls the shared modules in `modules/`; and end to end on 2026-10-25 at commit bc43733, with no code change during the run. The record-restore tool was tested live on 2026-10-26 at commit da576e0, in us-west-2, without Clumio protection: the test tenant had no room for another protection rule, so the run used the record-restore CSV that Clumio returned on 2026-10-25. Changes after bc43733 are tested offline, except where this section says otherwise.
+Tested live on a Clumio test tenant:
 
-**Proven:** connecting; protecting S3 (Backtrack, SecureVault Standard) and RDS and Aurora (PITR, SecureVault Standard, Archive); restoring; tearing down; IAM names matching step 0; `iam:TagRole` being required; READY and BLOCKED results; the IAM simulator allowing every action in the generated deploy policy, at the shipped defaults and with a prefix, boundary and tags; step 2 stopping without a connection; a protection rule picking up a newly created tagged database; upgrading steps 1, 2a and 2b from f257189, where the plan shows only moves, and says No changes after one apply; the shared modules connecting an account and protecting a database and a bucket by tag; placing a protection rule before an older, wider one in a shared tenant (`before_rule_id`, workshop only for now); and the orders workshop end to end: a Backtrack roll back, a record restore to a CSV, an Aurora restore beside the original, and a full recovery after the database, the bucket and their AWS backups were deleted. In the workshop also: resource names that carry the account and Region; the deployment ID that tells this run's copy from an older one; `lab` deleting only what carries the workshop tag; `--confirm-account`; the wait through the RDS Data API's "starting" answers; the shared report showing only the account's last four digits; Clumio's restore API for an Aurora database and for S3 objects; and `./lab down` waiting until a delete shows, proven in a short deploy-and-clean-up cycle the same day. The record-restore tool, on a live Aurora MySQL 3.10 table: it read the table's definition, checked 100 rows of Clumio's CSV, and copied them in one transaction, after which `./lab check` found every value exact; a row MySQL refused undid the whole copy, and nothing was written; and a second check found nothing missing. The workshop also deployed and cleaned up in a second Region, us-west-2.
+- In September 2026, at commit f257189.
+- On 2026-10-24, on a version just before commit bef3aca, which calls the shared modules in `modules/`.
+- On 2026-10-25, end to end, at commit bc43733, with no code change during the run.
+- On 2026-10-26, the record-restore tool only, at commit da576e0, in us-west-2. It ran without Clumio protection: the test tenant had no room for another protection rule, so the run used the record-restore CSV that Clumio returned on 2026-10-25.
 
-**Not yet proven:** `./lab down` refusing to run while Clumio is still backing up the workshop's database, tested offline against a live answer from Clumio's task API (no backup was running when the 2026-10-26 runs cleaned up); the record-restore tool with `timestamp`, `date` and `float` columns, which the orders table doesn't have, and on any table but the workshop's; RDS and Aurora protection by name; step 1 at the default path `/clumio/` (live runs used `/`); a full apply by a least-privilege deploy role, with tags, boundary and deny list; connecting EC2 and EBS (step 0 renders their IAM, but no live run created it); step 1b (BYOK), which has never been applied live: its key checks and permanence gate are tested offline, with mock providers; the optional compliance report (`report_emails`).
+Changes after bc43733 are tested offline, except where this section says otherwise.
 
-**Tested offline, in `./check.sh`:** formatting and validation of every step; the shipped placeholders stopping each plan; step 0's output against known-good copies; the shared modules choosing data and refusing bad input, with mock providers; step 1b's key checks; and the workshop lab's core logic: the check's verdict, the safety gate, the scorecard, and the account check before every deletion; and the record-restore tool, against a fake database, for the orders table and a second table with other types.
+**Proven, in the kit:**
+
+- Connecting, protecting, restoring and tearing down: S3 (Backtrack, SecureVault Standard), and RDS and Aurora (PITR, SecureVault Standard, Archive).
+- IAM names matching step 0, and `iam:TagRole` being required.
+- READY and BLOCKED results, and the IAM simulator allowing every action in the generated deploy policy, at the shipped defaults and with a prefix, boundary and tags.
+- Step 2 stopping without a connection.
+- A protection rule picking up a newly created tagged database.
+- Upgrading steps 1, 2a and 2b from f257189: the plan shows only moves, and says No changes after one apply.
+- The shared modules connecting an account and protecting a database and a bucket by tag.
+- Placing a protection rule before an older, wider one in a shared tenant (`before_rule_id`, workshop only for now).
+
+**Proven, in the orders workshop:**
+
+- End to end: a Backtrack roll back, a record restore to a CSV, an Aurora restore beside the original, and a full recovery after the database, the bucket and their AWS backups were deleted.
+- Resource names that carry the account and Region.
+- The deployment ID that tells this run's copy from an older one.
+- `lab` deleting only what carries the workshop tag, and `--confirm-account`.
+- The wait through the RDS Data API's "starting" answers.
+- The shared report showing only the account's last four digits.
+- Clumio's restore API for an Aurora database and for S3 objects.
+- `./lab down` waiting until a delete shows, proven in a short deploy-and-clean-up cycle the same day.
+- Deploying and cleaning up in a second Region, us-west-2.
+
+**Proven, in the record-restore tool,** on a live Aurora MySQL 3.10 table:
+
+- It read the table's definition, checked 100 rows of Clumio's CSV, and copied them in one transaction. `./lab check` then found every value exact.
+- A row MySQL refused undid the whole copy, and nothing was written.
+- A second check found nothing missing.
+
+**Not yet proven:**
+
+- `./lab down` refusing to run while Clumio is still backing up the workshop's database. It's tested offline against a live answer from Clumio's task API: no backup was running when the 2026-10-26 runs cleaned up.
+- The record-restore tool with `timestamp`, `date` and `float` columns, which the orders table doesn't have, and on any table but the workshop's.
+- RDS and Aurora protection by name.
+- Step 1 at the default path `/clumio/`. Live runs used `/`.
+- A full apply by a least-privilege deploy role, with tags, boundary and deny list.
+- Connecting EC2 and EBS. Step 0 renders their IAM, but no live run created it.
+- Step 1b (BYOK), which has never been applied live. Its key checks and permanence gate are tested offline, with mock providers.
+- The optional compliance report (`report_emails`).
+
+**Tested offline, in `./check.sh`:**
+
+- Formatting and validation of every step, and the shipped placeholders stopping each plan.
+- Step 0's output against known-good copies.
+- The shared modules choosing data and refusing bad input, with mock providers.
+- Step 1b's key checks.
+- The workshop lab's core logic: the check's verdict, the safety gate, the scorecard, and the account check before every deletion.
+- The record-restore tool, against a fake database, for the orders table and a second table with other types.
 
 ## What step 0's check can't see
 
