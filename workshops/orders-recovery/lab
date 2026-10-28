@@ -864,10 +864,12 @@ def parse_time(text):
 
 
 def database_in_clumio():
-    """orders-db as Clumio lists it, or None if Clumio hasn't found it yet."""
+    """orders-db in this Region as Clumio lists it, or None if Clumio hasn't found it yet. The name has
+    no Region in it, so an orders-db in another Region of this account must not count."""
     resources = clumio_items("/datasources/aws/rds-resources?limit=100&filter=" + clumio_filter(
         {"account_native_id": {"$eq": ACCOUNT}, "name": {"$contains": NAMES["cluster"]}}))
-    return next((r for r in resources if r.get("name") == NAMES["cluster"] and not r.get("is_deleted")), None)
+    return next((r for r in resources if r.get("name") == NAMES["cluster"] and r.get("aws_region") == REGION
+                 and not r.get("is_deleted")), None)
 
 
 def backups_running():

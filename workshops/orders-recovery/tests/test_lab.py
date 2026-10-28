@@ -1108,6 +1108,17 @@ class DownWaitsForClumio(unittest.TestCase):
         self.assertIn("primary_entity.id", paths[0])
         self.assertNotIn("status", paths[0])  # Clumio answers 504 when status is in the filter (seen live)
 
+    def test_the_database_is_the_one_in_this_region(self):
+        # orders-db has no Region in its name, so another Region's copy in the same account must not count.
+        # Field names as Clumio answered live for orders-db, an Aurora cluster (2026-10-25).
+        listed = [{"id": "other", "name": "orders-db", "aws_region": "ap-southeast-2", "is_deleted": False},
+                  {"id": "ours", "name": "orders-db", "aws_region": "us-west-2", "is_deleted": False}]
+        here = {"ACCOUNT": "123456789012", "REGION": "us-west-2"}
+        found, _ = self.stubbed({**here, "clumio_items": lambda _p: listed}, lab.database_in_clumio)
+        self.assertEqual(found["id"], "ours")
+        none, _ = self.stubbed({**here, "clumio_items": lambda _p: listed[:1]}, lab.database_in_clumio)
+        self.assertIsNone(none)
+
     def test_nothing_runs_when_clumio_has_no_database(self):
         found, _ = self.stubbed({"database_in_clumio": lambda: None}, lab.backups_running)
         self.assertEqual(found, [])
