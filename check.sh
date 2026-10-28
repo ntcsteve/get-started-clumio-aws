@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Checks for changes to this kit itself: run before every commit. Works on copies of the shipped
 # files only (never your .terraform, backend.tf, terraform.tfvars or state). Needs Terraform 1.7+
-# (for the mock-provider tests), the Terraform registry, and a few minutes. Makes no AWS or Clumio calls: the shipped placeholders stop every
-# plan, and the tests use mock providers.
+# (for the mock-provider tests), the Terraform registry, and a few minutes. Makes no AWS or Clumio
+# calls: the shipped placeholders stop every plan, and the tests use mock providers.
 #   1. terraform fmt          every .tf and .tfvars is formatted
 #   2. terraform validate     each step, with its committed lock file
 #   3. shipped placeholders   each step's terraform.tfvars.example stops the plan with a clear message

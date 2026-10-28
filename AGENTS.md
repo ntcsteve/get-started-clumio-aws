@@ -33,6 +33,8 @@ This repository sets Clumio up on AWS with Terraform, and teaches recovery with 
 
 **Tests come first.** Write the test, watch it fail, then change the code. Take expected values from an independent truth, such as a saved real output, never from the code under test.
 
+**Prove it live again before each minor release.** Run the workshop end to end in a test account, and update the dates in `SECURITY.md`, "What is proven, and what isn't". If a part can't run live, say so there before you release. A patch that changes only docs needs no live run.
+
 **Step 0's expected output is what a security team reviewed.** Run `0-iam-preview/test/test.sh --update` only after the person has reviewed the diff.
 
 **Keep versions locked.** Use `terraform init -lockfile=readonly`. Upgrade only on purpose, as in [docs/operate.md](docs/operate.md#on-purpose).

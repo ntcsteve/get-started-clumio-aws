@@ -13,7 +13,7 @@ AnyCompany deploys its orders application with Terraform, and its Clumio policie
    terraform apply
    ```
 
-   Terraform builds four parts. The Clumio connection builds alongside the application. The policies wait for the data, so Clumio's first recovery points hold it.
+   Terraform builds four parts. The Clumio connection builds alongside the application.
 
    | Part | What it is |
    |---|---|

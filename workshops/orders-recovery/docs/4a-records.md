@@ -60,7 +60,7 @@ You need the archive recovery point from [Module 1, step 7](1-deploy.md#wait-for
    SELECT COUNT(*) AS null_notes FROM <orders table> WHERE note IS NULL
    ```
 
-   **You should see** `1000` and `2419000.00`, then `142`. In the next step, `./lab check` shows the same orders, total and NULL count. Clumio's CSV keeps NULL apart from empty text: NULL is an empty field, and empty text is `""`. The repair reads them that way. If a spreadsheet re-saves the file, that difference is lost, and the check reports it as `orders changed  14 (note: 14)`, BROKEN. So download the CSV, and pass it to `./lab` untouched.
+   **You should see** `1000` and `2419000.00`, then `142`. In the next step, `./lab check` shows the same orders, total and NULL count. Clumio's CSV writes NULL as an empty field and empty text as `""`, and the repair keeps them apart. A spreadsheet re-save loses that difference, and the check reports `orders changed  14 (note: 14)`, BROKEN. So pass the CSV to `./lab` untouched.
 
 > [!NOTE]
 > Use `%` for remainders, not `MOD`. Error code 111 means the table name is incomplete: copy it again with the copy icon.
@@ -92,17 +92,7 @@ You need the archive recovery point from [Module 1, step 7](1-deploy.md#wait-for
 
 ### Is the schema right?
 
-```text
- ./lab seed      CREATE TABLE orders ...  ──▶  saves the schema to .lab/schema.json
- ./lab check     reads the schema now     ──▶  compares: columns (name, type, NULL), indexes
-                                                 same       ▶ schema  matches
-                                                 different  ▶ schema  different: <what>  ▶ BROKEN
-
- Records (4A)    CSV: rows only  ──▶ into the existing table ──▶ the check proves the table
- Full (4B, 5)    the database    ──▶ rows and definition     ──▶ the check proves the definition came back
-```
-
-A record restore returns rows, not the table's definition. The CSV holds values; the table they go into is the one already in the live database. So the question a DBA asks after 4A is two questions: did the rows come back exactly, and is the table still the table it should be? `./lab check` answers both, three ways:
+A record restore returns rows, not the table's definition. So after 4A, ask two questions: did the rows come back exactly, and is the table still what it should be? `./lab check` answers both, three ways:
 
 | Check | How | After 4A |
 |---|---|---|

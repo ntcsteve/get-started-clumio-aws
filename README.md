@@ -14,7 +14,7 @@ This repository sets Clumio up on AWS with Terraform, the way a platform team ru
 |---|---|---|
 | Learn recovery hands-on | [Orders recovery workshop](workshops/orders-recovery/README.md) | A test AWS account, and two sessions |
 | Protect real data | [Step 0](0-iam-preview/README.md), then steps 1 and 2 | A deploy role in your account, and a Clumio account |
-| Review what Clumio can do in your account | [SECURITY.md](SECURITY.md), which also lists what's tested live and what isn't | Nothing but time to read it |
+| Review what Clumio can do in your account | [SECURITY.md](SECURITY.md), which also lists what's tested live and what isn't | Time to read it |
 | Run it as a team | [Running it as a team](docs/operate.md#running-it-as-a-team) | Shared state, and someone who reads the alerts |
 | Put rows from a Clumio record restore back into a table | [The record-restore tool](tools/record-restore/README.md) | Python 3, the AWS CLI, and the RDS Data API on the cluster |
 
@@ -24,7 +24,7 @@ No Clumio account yet? Start a [free trial](https://portal.clumio.com/register),
 
 What it gives a cloud team, as Clumio's documentation describes it:
 
-- **Recover at the size of the mistake.** Restore one object, a prefix or a whole bucket. For a database, pull back selected records with SQL from an archive recovery point, or restore the whole database beside the original. You don't roll everything back to fix a part.
+- **Recover at the size of the mistake.** Restore one object, a prefix or a whole bucket. For a database, pull back selected records with SQL from an archive recovery point, or restore the whole database beside the original.
 - **Roll back without rewiring.** Backtrack rolls an S3 bucket back in place, by writing earlier versions back as current. It's the same bucket, so its policies and your Terraform state don't change.
 - **A way back outside the blast radius.** SecureVault keeps copies air-gapped and immutable, outside your organization's security domain. Deleting one before its retention ends takes a request from a Super Admin, approved by a second person in your organization, which Clumio then reviews. A restore can go into another connected account or Region.
 - **Protection as code, nothing to run.** Policies are Terraform resources that select data by tag, so new resources are covered once Clumio finds them. Clumio works through IAM roles in your account, with no agents or servers.
