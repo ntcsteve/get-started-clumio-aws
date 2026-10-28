@@ -79,7 +79,7 @@ The SNS topic carries changes in your account, such as a new bucket, to Clumio. 
 
 The permissions reviewers ask about. Step 0 finds them in the policies and lists them under "Review before approving" in `summary.md`. Read every file in `policies/` before approving.
 
-**All workloads:** use any KMS key whose key policy allows IAM principals in your account, to read encrypted data (deny Clumio in a key's policy to exclude it); send events and messages to Clumio's event bus and queues.
+**All workloads:** use any KMS key whose key policy allows IAM principals in your account, to read encrypted data (deny Clumio in a key's policy to exclude it; [a lab proof](https://github.com/ntcsteve/get-started-clumio-byok) shows both); send events and messages to Clumio's event bus and queues.
 
 **S3:** read objects in any bucket it can reach, including other accounts' buckets that allow it; write and delete objects in your buckets, for restores; change bucket event notifications and inventory; copy backups only to Clumio's own account; at runtime, create EventBridge rules `clumio-s3-event-rule-*` and Storage Lens configurations `clumio-storage-lens-*`.
 
@@ -143,6 +143,11 @@ Changes after bc43733 are tested offline, except where this section says otherwi
 - It read the table's definition, checked 100 rows of Clumio's CSV, and copied them in one transaction. `./lab check` then found every value exact.
 - A row MySQL refused undid the whole copy, and nothing was written.
 - A second check found nothing missing.
+
+**Proven, in a separate lab** ([Clumio and AWS encryption keys: a lab proof](https://github.com/ntcsteve/get-started-clumio-byok)), on 2026-10-25 to 2026-10-27, with the shared modules at v1.1.0 for S3 and RDS (the EC2 policy was written directly, as the kit has no EC2 module):
+
+- Clumio backed up and restored S3, RDS and EC2 data under AWS-managed keys (`aws/s3`, `aws/rds`, `aws/ebs`) and customer-managed keys. The raw AWS and Clumio records are in that repository.
+- A key policy that names Clumio's role allowed the backup. An explicit Deny on the key stopped it, and Clumio reported the failed object.
 
 **Not yet proven:**
 
