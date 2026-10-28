@@ -78,7 +78,7 @@ terraform {
 
 **Let Terraform own the backup policies.** Edits in the Clumio console are undone by the next apply. Change `terraform.tfvars` instead.
 
-**Grow by copying.** One copy of these folders per account and Region: don't change `account_id` or `region` in a folder that's already applied. This suits a handful of accounts. For a whole AWS Organization, Clumio documents onboarding with [CloudFormation StackSets](https://documentation.commvault.com/clumio/connecting_multiple_accounts_with_cloudformation_using_aws_organizations.html). Tag data by tier (gold, silver, bronze), with a step 2 folder per tier.
+**Grow by copying.** One copy of these folders per account and Region: don't change `account_id` or `region` in a folder that's already applied. Copy from a release tag, such as `git checkout v1.1.2`, so every copy calls the same module code. This suits a handful of accounts. For a whole AWS Organization, Clumio documents onboarding with [CloudFormation StackSets](https://documentation.commvault.com/clumio/connecting_multiple_accounts_with_cloudformation_using_aws_organizations.html). Tag data by tier (gold, silver, bronze), with a step 2 folder per tier.
 
 **One Clumio tenant per state.** A token from another tenant can't see the connection and policies this state created, so Terraform would create a second set. Swapping a token within the same tenant is safe at any time.
 

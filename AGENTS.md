@@ -20,7 +20,7 @@ This repository sets Clumio up on AWS with Terraform, and teaches recovery with 
 
 ## Rules for every task
 
-1. **Plan, then ask, then apply the saved plan.** Run `terraform plan -out=tfplan`, show the person the plan, and wait for their go. Then run `terraform apply tfplan`. Never use `-auto-approve`. One go covers one apply.
+1. **Plan, then ask, then apply the saved plan.** Run `terraform plan -out=tfplan`, show the person the plan, and wait for their go. Then run `terraform apply tfplan`. Never use `-auto-approve`. One go covers one apply or destroy.
 2. **The person names the account.** `account_id` and `region` in each `terraform.tfvars` come from the person, never from a guess. Step 2 has no AWS sign-in, so it can't check the account: on a shared Clumio tenant, a wrong `account_id` that another team connected would protect their account, and change its databases' PITR window.
 3. **Never set `i_understand_byok_is_permanent` in step 1b.** Only the person sets it, after reading `1b-own-key/README.md`. BYOK binds the whole Clumio tenant to one key and one account, for good.
 4. **Never print a secret.** Don't print `CLUMIO_API_TOKEN` or other environment variables. Showing `terraform plan` output is fine, but never open a `*.tfstate` or `tfplan` file, or run `terraform show`: they hold secrets in plain text, such as the ExternalIds Clumio uses to assume its roles. The person exports the token in the shell that starts you.

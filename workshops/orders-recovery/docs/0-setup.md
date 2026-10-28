@@ -88,7 +88,7 @@ A test account is an AWS account with no real data. The workshop builds a small 
 
     If your organization requires tags, or a permissions boundary on IAM roles, set them in the same file. Its comments show how. Otherwise, leave them as they are.
 
-    Leave `archive_retention_months = 1`. It keeps archive recovery points, and their cost, as short as Clumio allows. Clumio charges an early-deletion fee for archive recovery points kept under 12 months.
+    Leave `archive_retention_months = 1`. It keeps archive recovery points as short as Clumio allows. Clumio charges an early-deletion fee for archive recovery points kept under 12 months.
 
 ## Check that the account is ready
 
