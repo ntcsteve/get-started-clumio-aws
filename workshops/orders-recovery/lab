@@ -384,7 +384,7 @@ def cmd_down(args):
         stop("terraform destroy didn't finish. Fix the error above, then run ./lab down again")
     wait_until_gone()
     record("down")  # a new deployment starts a new evidence log section
-    say("DONE: the workshop is gone. Clumio keeps recovery points it already took until their retention ends")
+    say("DONE: the workshop is gone")
 
 
 def left_behind():

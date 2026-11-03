@@ -2,7 +2,7 @@
 
 **Requires:** a started session: see [Start a session](0-setup.md#start-a-session). Run it at any time to stop the workshop.
 
-To stop AWS charges, delete everything the workshop created. One command does it, and then checks that nothing is left.
+To stop AWS charges, delete everything the workshop created. One command does it, and then checks that nothing is left. It removes the Clumio connection, which ends protection, so restore anything you want to keep first.
 
 1. Stop the portal: in its terminal, press Ctrl-C. Then run the clean-up command. It lists what it will delete: any restored clusters, any instance added after Terraform built the database, and everything Terraform built. Read the list, then enter the account ID. It deletes the restored clusters, then runs `terraform destroy` without asking again. If Clumio is still backing up the database, as it is in the first hour after a deploy, it says so and deletes nothing: wait, then run it again.
 
@@ -13,7 +13,7 @@ To stop AWS charges, delete everything the workshop created. One command does it
    **You should see** this on the last line:
 
    ```text
-   DONE: the workshop is gone. Clumio keeps recovery points it already took until their retention ends
+   DONE: the workshop is gone
    ```
 
 2. If it says `STOP` instead, fix what the message names, and run `./lab down` again. It is safe to run again: it skips what is already deleted, and waits for what is still being deleted.
@@ -36,7 +36,7 @@ The step from a workshop to your own estate: protect one of your own non-product
 
 You'll learn what this workshop can't tell you: how long protection and recovery take at your size, and whether your own checks pass.
 
-**Key takeaway:** One command removes the workshop, and then checks that nothing is left. Recovery points that Clumio already took stay until their retention ends.
+**Key takeaway:** One command removes the workshop, and then checks that nothing is left.
 
 ## Summary
 
